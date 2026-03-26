@@ -1,0 +1,11 @@
+# Claude Code 本地配置
+.claude/
+
+# 备份和临时文件
+data/*.backup.json
+data/*.backup.csv
+data/failed_urls.txt
+
+__pycache__/
+.DS_Store
+*.pyc
