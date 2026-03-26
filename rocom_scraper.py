@@ -134,22 +134,20 @@ def parse_stat_block(soup: BeautifulSoup) -> dict:
         "生命": "hp", "物攻": "atk", "魔攻": "sp_atk",
         "物防": "def", "魔防": "sp_def", "速度": "spd",
     }
-    for key_cn, key_en in stat_map.items():
-        # 通用方法: 找包含该文字的节点, 取紧邻的数字
-        node = soup.find(string=re.compile(key_cn))
-        if node:
-            # 向上找父节点, 再找数字
-            parent = node.find_parent()
-            if parent:
-                nums = re.findall(r'\d+', parent.get_text())
-                if nums:
-                    stats[key_en] = int(nums[-1])
-    # 总种族值
-    total_node = soup.find(string=re.compile(r'种族值'))
-    if total_node:
-        nums = re.findall(r'\d+', total_node.find_parent().get_text() if total_node.find_parent() else "")
-        if nums:
-            stats["total"] = int(nums[0])
+    # 每个种族值在 <li> 里，包含 <p class="rocom_sprite_info_qualification_name">名称</p> 和数字
+    seen = set()
+    for li in soup.find_all("li"):
+        name_p = li.find("p", attrs={"class": "rocom_sprite_info_qualification_name"})
+        if not name_p:
+            continue
+        stat_name = name_p.get_text(strip=True)
+        if stat_name in stat_map and stat_name not in seen:
+            nums = re.findall(r'\d+', li.get_text())
+            if nums:
+                stats[stat_map[stat_name]] = int(nums[-1])
+                seen.add(stat_name)
+    if len(stats) == 6:
+        stats["total"] = sum(stats.values())
     return stats
 
 
@@ -194,16 +192,17 @@ def parse_type_matchup(soup: BeautifulSoup) -> dict:
         node = soup.find(string=re.compile(f'^{label_cn}$'))
         if not node:
             continue
-        parent = node.find_parent()
-        if not parent:
+        p = node.find_parent()
+        if not p:
             continue
-        # 找同级或子级的属性图标
-        sibling = parent.find_next_sibling()
-        if sibling:
-            for img in sibling.find_all("img"):
-                alt = img.get("alt", "")
-                if "属性" in alt:
-                    matchup[key].append(img_alt_to_attr(alt))
+        # 属性图片是 <p> 的兄弟节点，同在一个 <div> 内
+        container = p.find_parent()
+        if not container:
+            continue
+        for img in container.find_all("img"):
+            alt = img.get("alt", "")
+            if "属性" in alt:
+                matchup[key].append(img_alt_to_attr(alt))
     return matchup
 
 
