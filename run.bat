@@ -9,14 +9,16 @@ echo    Rocom Sprite Data Tool
 echo  ================================
 echo    1. Full scrape (all sprites)
 echo    2. Check for updates
-echo    3. Exit
+echo    3. Browse sprites (viewer)
+echo    4. Exit
 echo  ================================
 echo.
-set /p choice= Select [1-3]:
+set /p choice= Select [1-4]:
 
 if "%choice%"=="1" goto scrape
 if "%choice%"=="2" goto check
-if "%choice%"=="3" goto end
+if "%choice%"=="3" goto view
+if "%choice%"=="4" goto end
 goto menu
 
 :scrape
@@ -31,6 +33,10 @@ echo.
 python -X utf8 rocom_scraper.py --check-update --delay 1.5
 echo.
 pause
+goto end
+
+:view
+python -X utf8 viewer.py
 goto end
 
 :end
