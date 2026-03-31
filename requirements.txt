@@ -1,2 +1,7 @@
 requests
 beautifulsoup4
+
+# 队伍图片导入功能（二选一，或两者都装）：
+anthropic                  # API 识别（精度最高，需配置 ANTHROPIC_API_KEY）
+# rapidocr-onnxruntime    # 本地 OCR（轻量，~50MB，首次运行自动下载模型）
+# easyocr                 # 本地 OCR（精度更高，依赖 PyTorch ~1.5GB）

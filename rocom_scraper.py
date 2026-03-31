@@ -18,6 +18,7 @@ import re
 import csv
 import json
 import time
+import random
 import argparse
 import os
 from pathlib import Path
@@ -31,11 +32,18 @@ LIST_URL = "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (compatible; RocomScraper/1.0; "
-        "+https://github.com/your-repo/rocom-assistant)"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://wiki.biligame.com/rocom/",
 }
+
+# 请求间隔：每次随机 1.5~3 秒（--delay 参数覆盖下限）
+_DELAY_MIN = 1.5
+_DELAY_MAX = 3.0
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
@@ -57,16 +65,35 @@ def print_progress(current: int, total: int, label: str = "", width: int = 28):
 # ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def fetch(url: str, retries: int = 3) -> BeautifulSoup:
-    """抓取页面并返回 BeautifulSoup 对象"""
+    """
+    抓取页面并返回 BeautifulSoup 对象。
+    失败时采用递增等待：第1次10s，第2次20s，第3次30s。
+    567（反爬限制）单独提示。
+    """
+    # 每次重试前等待时间（秒）
+    retry_waits = [10, 20, 30]
+
     for attempt in range(retries):
         try:
             resp = SESSION.get(url, timeout=15)
+            if resp.status_code == 567:
+                wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+                print(f"\n  [!] 触发反爬限制 (567)，等待 {wait}s 后重试 "
+                      f"({attempt+1}/{retries})...")
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
             return BeautifulSoup(resp.text, "html.parser")
+        except requests.HTTPError as e:
+            wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+            print(f"\n  [!] HTTP 错误 ({attempt+1}/{retries}): {e}，等待 {wait}s...")
+            time.sleep(wait)
         except requests.RequestException as e:
-            print(f"  [!] 请求失败 ({attempt+1}/{retries}): {e}")
-            time.sleep(3)
-    raise RuntimeError(f"无法抓取: {url}")
+            wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+            print(f"\n  [!] 请求失败 ({attempt+1}/{retries}): {e}，等待 {wait}s...")
+            time.sleep(wait)
+
+    raise RuntimeError(f"无法抓取（已重试 {retries} 次）: {url}")
 
 
 def img_alt_to_attr(alt: str) -> str:
@@ -412,7 +439,7 @@ def check_update(out_path: Path, delay: float = 1.5):
         except Exception as e:
             print(f"\n  [!] 失败: {e}")
             failed.append(entry["url"])
-        time.sleep(delay)
+        time.sleep(random.uniform(delay, delay + 1.5))
 
     _save(results, out_path)
     csv_path = out_path.with_suffix(".csv")
@@ -430,7 +457,8 @@ def check_update(out_path: Path, delay: float = 1.5):
 def main():
     parser = argparse.ArgumentParser(description="洛克王国精灵数据爬虫")
     parser.add_argument("--limit", type=int, default=0, help="只爬前N只 (0=全部)")
-    parser.add_argument("--delay", type=float, default=0.8, help="请求间隔(秒)")
+    parser.add_argument("--delay", type=float, default=1.5,
+                        help="请求间隔下限(秒)，实际为 delay~(delay+1.5) 随机值，默认 1.5")
     parser.add_argument("--output", default="data/sprites.json", help="输出路径")
     parser.add_argument("--check-update", action="store_true", help="检查并增量更新数据")
     args = parser.parse_args()
@@ -470,7 +498,7 @@ def main():
             print(f"\n  [!] 失败: {e}")
             failed.append(entry["url"])
 
-        time.sleep(args.delay)
+        time.sleep(random.uniform(args.delay, args.delay + 1.5))
 
     # 3. 最终保存
     _save(results, out_path)
