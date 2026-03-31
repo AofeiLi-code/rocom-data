@@ -12,7 +12,7 @@
 from typing import List, Callable, Optional
 
 from sim.pokemon import Pokemon
-from sim.pokemon_db import get_pokemon, get_all_pokemon_names, get_nature, load_pokemon_db
+from sim.pokemon_db import get_pokemon, get_all_pokemon_names, get_nature, nature_display, load_pokemon_db
 from sim.skill_db import get_skill, get_learnable_skills, load_skills
 # build_pokemon 在函数内延迟导入，避免与 team_builder.py 的循环引用
 
@@ -227,16 +227,15 @@ def build_team_interactive(
         attrs = data.get("属性列表", [data.get("属性", "普通")]) if data else ["普通"]
         type_str = "+".join(attrs)
         total = data.get("种族值总和", 0) if data else 0
-        nature_boost  = data.get("性格提升", "?") if data else "?"
-        nature_reduce = data.get("性格降低", "?") if data else "?"
+        nat_name = data.get("性格", "认真") if data else "认真"
         _print(f"\n  ✔ {pokemon_name}  [{type_str}]  种族值总和 {total}"
-               f"  性格：{nature_boost}↑ {nature_reduce}↓")
+               f"  性格：{nature_display(nat_name)}")
 
         skill_names = _select_skills(pokemon_name, _input, _print)
         pokemon = build_pokemon(pokemon_name, skill_names)
         team.append(pokemon)
 
-        _print(f"\n  ── 已加入队伍：{pokemon_name}  性格：{nature_boost}↑ {nature_reduce}↓"
+        _print(f"\n  ── 已加入队伍：{pokemon_name}  性格：{nature_display(nat_name)}"
                f"  技能：[{', '.join(skill_names)}]")
         _print(f"     HP={pokemon.hp}  物攻={pokemon.attack}  魔攻={pokemon.sp_attack}"
                f"  物防={pokemon.defense}  魔防={pokemon.sp_defense}  速度={pokemon.speed}")
@@ -245,9 +244,8 @@ def build_team_interactive(
     _print(f"  队伍「{team_name}」组建完成：")
     for i, p in enumerate(team, 1):
         skill_names = [s.name for s in p.skills]
-        nature = get_nature(p.name)
-        nature_str = (f"  性格：{nature['提升']}↑{nature['降低']}↓"
-                      if nature else "")
+        nat = get_nature(p.name)
+        nature_str = f"  性格：{nature_display(nat)}" if nat else ""
         _print(f"  {i}. {p.name:<12}{nature_str}  [{', '.join(skill_names)}]")
     _print(f"{'='*50}\n")
 

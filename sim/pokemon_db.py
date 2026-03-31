@@ -59,26 +59,29 @@ def _compute_battle_stats(race_values: Dict[str, int]) -> Dict[str, int]:
         else:
             iv["spdef"] = 10
 
+    # 性格只作用于战斗属性（不含 HP），从 5 个战斗属性中选最高/最低
+    combat_stats = ["atk", "spatk", "def", "spdef", "speed"]
+    combat_list  = [(s, rv[s]) for s in combat_stats]
+    max_val = max(v for _, v in combat_list)
+    min_val = min(v for _, v in combat_list)
+    max_cs  = [s for s, v in combat_list if v == max_val]
+    min_cs  = [s for s, v in combat_list if v == min_val]
+
+    boost_stat = random.choice(max_cs)
+    reduce_cands = [s for s in min_cs if s != boost_stat]
+    if not reduce_cands:
+        reduce_cands = [s for s in combat_stats if s != boost_stat]
+    reduce_stat = random.choice(reduce_cands)
+
+    # 查命名性格（找不到时用"认真"中性兜底）
+    nature_name = NATURE_BY_STATS.get((boost_stat, reduce_stat), "认真")
+
     nature = {s: 0.0 for s in stat_names}
-    race_list = [(s, rv[s]) for s in stat_names]
-    max_val = max(v for _, v in race_list)
-    min_val = min(v for _, v in race_list)
-    max_stats = [s for s, v in race_list if v == max_val]
-    min_stats = [s for s, v in race_list if v == min_val]
-
-    boost_stat = random.choice(max_stats)
-    reduce_candidates = [s for s in min_stats if s != boost_stat]
-    if not reduce_candidates:
-        reduce_candidates = [s for s in stat_names if s != boost_stat]
-    reduce_stat = random.choice(reduce_candidates)
-
-    nature[boost_stat] = 0.1   # 真实游戏：性格提升 +10%（原误用 +20%）
-    nature[reduce_stat] = -0.1  # 真实游戏：性格降低 -10%
-
-    _STAT_CN = {
-        "hp": "生命", "atk": "物攻", "spatk": "魔攻",
-        "def": "物防", "spdef": "魔防", "speed": "速度",
-    }
+    pair = NATURES[nature_name]
+    if pair[0]:
+        nature[pair[0]] = 0.1    # 真实游戏 +10%
+        nature[pair[1]] = -0.1   # 真实游戏 -10%
+    # HP 不受性格影响
 
     return {
         "生命值": _calc_hp(rv["hp"],    iv["hp"],    nature["hp"]),
@@ -87,9 +90,7 @@ def _compute_battle_stats(race_values: Dict[str, int]) -> Dict[str, int]:
         "物防":   _calc_stat(rv["def"],   iv["def"],   nature["def"]),
         "魔防":   _calc_stat(rv["spdef"], iv["spdef"], nature["spdef"]),
         "速度":   _calc_stat(rv["speed"], iv["speed"], nature["speed"]),
-        # 性格信息（方便 UI 层展示）
-        "性格提升": _STAT_CN[boost_stat],
-        "性格降低": _STAT_CN[reduce_stat],
+        "性格":   nature_name,   # 命名性格，如 "胆小"
     }
 
 
@@ -181,8 +182,7 @@ def load_pokemon_db(filepath: Optional[str] = None) -> None:
             "物防":       battle_stats["物防"],
             "魔防":       battle_stats["魔防"],
             "速度":       battle_stats["速度"],
-            "性格提升":   battle_stats["性格提升"],
-            "性格降低":   battle_stats["性格降低"],
+            "性格":       battle_stats["性格"],    # 命名性格
         }
 
     random.setstate(rng_state)
@@ -234,31 +234,70 @@ def search_pokemon(keyword: str) -> List[dict]:
     return results[:20]
 
 
+# ============================================================
+# 性格系统（25 种，来自 roco-world 数据）
+# ============================================================
+# 内部键 → 中文显示名（HP 不参与性格）
+_STAT_KEY_DISPLAY = {
+    "atk": "物攻", "def": "物防", "spatk": "魔攻",
+    "spdef": "魔防", "speed": "速度",
+}
+
+# 旧版中文名 → 内部键（用于 teams.json 旧数据迁移）
 _STAT_CN_TO_KEY = {
     "生命": "hp", "物攻": "atk", "魔攻": "spatk",
     "物防": "def", "魔防": "spdef", "速度": "speed",
 }
-NATURE_STATS = ["生命", "物攻", "魔攻", "物防", "魔防", "速度"]
+
+# 25 种命名性格：name → (boost_key, reduce_key)，None = 无变化
+NATURES: Dict[str, tuple] = {
+    "胆小": ("speed",  "atk"),   "急躁": ("speed",  "def"),
+    "天真": ("speed",  "spdef"), "开朗": ("speed",  "spatk"),
+    "固执": ("atk",    "spatk"), "勇敢": ("atk",    "speed"),
+    "调皮": ("atk",    "spdef"), "孤独": ("atk",    "def"),
+    "保守": ("spatk",  "atk"),   "冷静": ("spatk",  "speed"),
+    "马虎": ("spatk",  "spdef"), "稳重": ("spatk",  "def"),
+    "淘气": ("def",    "spatk"), "大胆": ("def",    "atk"),
+    "悠闲": ("def",    "speed"),
+    "沉着": ("spdef",  "atk"),   "慎重": ("spdef",  "spatk"),
+    "温顺": ("spdef",  "def"),   "狂妄": ("spdef",  "speed"),
+    "认真": (None, None), "实干": (None, None), "坦率": (None, None),
+    "害羞": (None, None), "浮躁": (None, None),
+}
+
+# 反查：(boost_key, reduce_key) → 性格名
+NATURE_BY_STATS: Dict[tuple, str] = {
+    v: k for k, v in NATURES.items() if v[0] is not None
+}
+
+# 供 battle.py 列出可选性格（战斗属性，不含生命）
+NATURE_STATS = list(_STAT_KEY_DISPLAY.values())   # ["物攻","物防","魔攻","魔防","速度"]
 
 
-def compute_stats_with_nature(name: str, boost_cn: str, reduce_cn: str) -> Optional[dict]:
+def nature_display(nature_name: str) -> str:
+    """返回性格的完整显示，如 '胆小（速度↑物攻↓）'"""
+    pair = NATURES.get(nature_name, (None, None))
+    if pair[0] is None:
+        return f"{nature_name}（无变化）"
+    return (f"{nature_name}（{_STAT_KEY_DISPLAY[pair[0]]}↑"
+            f"{_STAT_KEY_DISPLAY[pair[1]]}↓）")
+
+
+def compute_stats_with_nature(name: str, nature_name: str) -> Optional[dict]:
     """
-    用自定义性格重新计算指定精灵的进战六维。
+    用指定命名性格重新计算精灵的进战六维。
 
     Parameters
     ----------
-    name      : 精灵名
-    boost_cn  : 提升属性中文名，如 "速度"
-    reduce_cn : 降低属性中文名，如 "魔攻"
+    name         : 精灵名
+    nature_name  : 性格名，如 "开朗" / "胆小"（须在 NATURES 中）
 
     Returns
     -------
     {"生命值": int, "物攻": int, ...} 或 None（精灵不存在）
     """
     load_pokemon_db()
-    data = _db.get(name)
-    if not data:
-        data = get_pokemon(name)
+    data = _db.get(name) or get_pokemon(name)
     if not data:
         return None
 
@@ -269,7 +308,6 @@ def compute_stats_with_nature(name: str, boost_cn: str, reduce_cn: str) -> Optio
     }
     stat_names = ["hp", "atk", "spatk", "def", "spdef", "speed"]
 
-    # 个体值（与原公式一致）
     iv = {s: 0 for s in stat_names}
     iv["hp"] = 10
     iv["atk" if race["atk"] >= race["spatk"] else "spatk"] = 10
@@ -278,13 +316,11 @@ def compute_stats_with_nature(name: str, boost_cn: str, reduce_cn: str) -> Optio
     else:
         iv["def" if race["def"] >= race["spdef"] else "spdef"] = 10
 
-    # 自定义性格（与自动性格保持一致：+10% / -10%）
-    boost_key  = _STAT_CN_TO_KEY.get(boost_cn, "speed")
-    reduce_key = _STAT_CN_TO_KEY.get(reduce_cn, "spatk")
     nature = {s: 0.0 for s in stat_names}
-    nature[boost_key] = 0.1
-    if reduce_key != boost_key:
-        nature[reduce_key] = -0.1
+    pair = NATURES.get(nature_name, (None, None))
+    if pair[0]:
+        nature[pair[0]] = 0.1
+        nature[pair[1]] = -0.1
 
     return {
         "生命值": _calc_hp(race["hp"],    iv["hp"],    nature["hp"]),
@@ -296,16 +332,13 @@ def compute_stats_with_nature(name: str, boost_cn: str, reduce_cn: str) -> Optio
     }
 
 
-def get_nature(name: str) -> Optional[dict]:
+def get_nature(name: str) -> Optional[str]:
     """
-    返回指定精灵的性格信息 {"提升": "速度", "降低": "魔攻"}。
-    未找到时返回 None。
+    返回精灵的命名性格，如 "胆小"。未找到时返回 None。
     """
     load_pokemon_db()
     data = get_pokemon(name)
-    if data is None:
-        return None
-    return {"提升": data.get("性格提升", ""), "降低": data.get("性格降低", "")}
+    return data.get("性格") if data else None
 
 
 def get_all_pokemon_names() -> List[str]:

@@ -257,33 +257,46 @@ def _edit_team(team_name: str) -> None:
     """交互式编辑队伍中任意精灵的技能和性格，完成后保存。"""
     from sim.skill_db import get_learnable_skills, get_all_skills
     from sim.team_roster import get_team_def
-    from sim.pokemon_db import get_nature, get_pokemon, NATURE_STATS
+    from sim.pokemon_db import (get_nature, nature_display, NATURES,
+                                compute_stats_with_nature, _STAT_KEY_DISPLAY)
 
     team_def = get_team_def(team_name)
     if team_def is None:
         print(f"  [!] 找不到队伍「{team_name}」")
         return
 
-    # 深复制成员列表（保留 nature_boost / nature_reduce 自定义字段）
+    # 深复制成员列表（保留 nature 字段）
     members = [
-        {
-            "pokemon":      m["pokemon"],
-            "skills":       list(m["skills"]),
-            "nature_boost":  m.get("nature_boost"),
-            "nature_reduce": m.get("nature_reduce"),
-        }
+        {"pokemon": m["pokemon"], "skills": list(m["skills"]),
+         "nature": m.get("nature")}
         for m in team_def["members"]
     ]
     all_skill_names = set(get_all_skills().keys())
 
+    # 25 种性格有序列表，方便按序号选择
+    _NATURE_LIST = list(NATURES.keys())  # 固定顺序
+
     def _nat_str(m: dict) -> str:
         """返回该成员当前显示的性格字符串"""
-        boost  = m.get("nature_boost")
-        reduce = m.get("nature_reduce")
-        if boost and reduce:
-            return f"[{boost}↑{reduce}↓*]"  # * 表示自定义
-        nat = get_nature(m["pokemon"])
-        return f"[{nat['提升']}↑{nat['降低']}↓]" if nat else ""
+        custom = m.get("nature")
+        if custom:
+            return f"[{nature_display(custom)}*]"   # * = 自定义
+        auto = get_nature(m["pokemon"])
+        return f"[{nature_display(auto)}]" if auto else ""
+
+    def _print_nature_table() -> None:
+        """打印 25 种性格表（带序号，4 列）"""
+        print("  25 种性格：")
+        cols = 4
+        for i, name in enumerate(_NATURE_LIST, 1):
+            pair = NATURES[name]
+            if pair[0]:
+                tag = f"{name}({_STAT_KEY_DISPLAY[pair[0]]}↑{_STAT_KEY_DISPLAY[pair[1]]}↓)"
+            else:
+                tag = f"{name}（无变化）"
+            print(f"  {i:2}. {tag:<18}", end="\n" if i % cols == 0 else "")
+        if len(_NATURE_LIST) % cols != 0:
+            print()
 
     while True:
         print(f"\n{LINE}")
@@ -311,46 +324,43 @@ def _edit_team(team_name: str) -> None:
                 continue
             member = members[poke_idx]
             pname  = member["pokemon"]
-            auto   = get_nature(pname)
-            cur_b  = member.get("nature_boost")  or (auto["提升"]  if auto else "?")
-            cur_r  = member.get("nature_reduce") or (auto["降低"] if auto else "?")
-            auto_b = auto["提升"] if auto else "?"
-            auto_r = auto["降低"] if auto else "?"
+            auto_nat = get_nature(pname) or "认真"
+            cur_nat  = member.get("nature") or auto_nat
 
-            print(f"\n  {pname} 当前性格：{cur_b}↑ {cur_r}↓")
-            print(f"  可选属性：{'  '.join(NATURE_STATS)}")
-            print(f"  输入「提升:降低」（如 速度:魔攻），回车=恢复自动[{auto_b}↑{auto_r}↓]：", end="")
-            cmd = input().strip().replace("：", ":")
+            print(f"\n  {pname} 当前性格：{nature_display(cur_nat)}"
+                  + ("（自动）" if not member.get("nature") else "（自定义*）"))
+            _print_nature_table()
+            print(f"\n  输入序号或性格名（回车=恢复自动 [{nature_display(auto_nat)}]）：", end="")
+            cmd = input().strip()
 
             if not cmd:
-                member["nature_boost"] = None
-                member["nature_reduce"] = None
-                print(f"  已恢复自动性格：{auto_b}↑ {auto_r}↓")
+                member["nature"] = None
+                print(f"  已恢复自动性格：{nature_display(auto_nat)}")
                 continue
 
-            if ":" not in cmd:
-                print(f"  [!] 格式：提升属性:降低属性，如 速度:魔攻")
-                continue
+            # 尝试序号
+            new_nat = None
+            if cmd.isdigit() and 1 <= int(cmd) <= len(_NATURE_LIST):
+                new_nat = _NATURE_LIST[int(cmd) - 1]
+            elif cmd in NATURES:
+                new_nat = cmd
+            else:
+                # 模糊匹配
+                fuzzy = [n for n in NATURES if cmd in n]
+                if len(fuzzy) == 1:
+                    new_nat = fuzzy[0]
+                    print(f"  → 模糊匹配：{new_nat}")
+                elif len(fuzzy) > 1:
+                    print(f"  [!] 匹配多个：{', '.join(fuzzy)}，请更精确")
+                    continue
+                else:
+                    print(f"  [!] 未找到性格「{cmd}」")
+                    continue
 
-            new_b, new_r = [s.strip() for s in cmd.split(":", 1)]
-
-            err = None
-            if new_b not in NATURE_STATS:
-                err = f"「{new_b}」不是有效属性"
-            elif new_r not in NATURE_STATS:
-                err = f"「{new_r}」不是有效属性"
-            elif new_b == new_r:
-                err = "提升和降低不能是同一属性"
-            if err:
-                print(f"  [!] {err}，可选：{'  '.join(NATURE_STATS)}")
-                continue
-
-            member["nature_boost"]  = new_b
-            member["nature_reduce"] = new_r
-            from sim.pokemon_db import compute_stats_with_nature
-            new_stats = compute_stats_with_nature(pname, new_b, new_r)
+            member["nature"] = new_nat
+            new_stats = compute_stats_with_nature(pname, new_nat)
             if new_stats:
-                print(f"  {pname} 性格已设为 {new_b}↑ {new_r}↓  "
+                print(f"  {pname} 性格已设为 {nature_display(new_nat)}  "
                       f"→ HP={new_stats['生命值']} 物攻={new_stats['物攻']} "
                       f"魔攻={new_stats['魔攻']} 物防={new_stats['物防']} "
                       f"魔防={new_stats['魔防']} 速度={new_stats['速度']}")
@@ -518,17 +528,14 @@ def _menu_manage() -> None:
                 t = teams[idx]
                 tag = "[预设]" if t.get("preset") else "[自定]"
                 print(f"\n  {tag} 队伍：{t['name']}")
-                from sim.pokemon_db import get_nature
+                from sim.pokemon_db import get_nature, nature_display
                 for i, m in enumerate(t["members"], 1):
-                    # 优先显示自定义性格，其次自动
-                    cb = m.get("nature_boost")
-                    cr = m.get("nature_reduce")
-                    if cb and cr:
-                        nat_str = f"  {cb}↑{cr}↓*"
+                    custom = m.get("nature")
+                    if custom:
+                        nat_str = f"  {nature_display(custom)}*"
                     else:
-                        nature = get_nature(m["pokemon"])
-                        nat_str = (f"  {nature['提升']}↑{nature['降低']}↓"
-                                   if nature else "")
+                        auto = get_nature(m["pokemon"])
+                        nat_str = f"  {nature_display(auto)}" if auto else ""
                     print(f"    {i}. {m['pokemon']:<12}{nat_str}"
                           f"  技能：{', '.join(m['skills'])}")
                 input("\n  按 Enter 返回...")   # ← 修复：暂停后再刷新列表

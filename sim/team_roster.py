@@ -79,11 +79,51 @@ def _load() -> None:
         for preset in _BUILTIN_PRESETS:
             if preset["name"] not in existing_names:
                 _roster.insert(0, dict(preset))
+        # 迁移旧版 nature_boost/nature_reduce → nature（命名性格）
+        if _migrate_old_natures():
+            _save()
     else:
         _roster = [dict(p) for p in _BUILTIN_PRESETS]
         _save()
 
     _loaded = True
+
+
+def _migrate_old_natures() -> bool:
+    """
+    将 teams.json 中旧版 nature_boost/nature_reduce 字段迁移为命名性格。
+    返回 True 表示有修改，需要重新保存。
+    """
+    # 内联映射，避免循环导入
+    _stat_cn = {"物攻": "atk", "物防": "def", "魔攻": "spatk",
+                "魔防": "spdef", "速度": "speed"}
+    _nature_by_stats = {
+        ("speed","atk"): "胆小",  ("speed","def"): "急躁",
+        ("speed","spdef"): "天真", ("speed","spatk"): "开朗",
+        ("atk","spatk"): "固执",  ("atk","speed"): "勇敢",
+        ("atk","spdef"): "调皮",  ("atk","def"): "孤独",
+        ("spatk","atk"): "保守",  ("spatk","speed"): "冷静",
+        ("spatk","spdef"): "马虎", ("spatk","def"): "稳重",
+        ("def","spatk"): "淘气",  ("def","atk"): "大胆",
+        ("def","speed"): "悠闲",
+        ("spdef","atk"): "沉着",  ("spdef","spatk"): "慎重",
+        ("spdef","def"): "温顺",  ("spdef","speed"): "狂妄",
+    }
+    changed = False
+    for team in _roster:
+        for member in team.get("members", []):
+            if "nature_boost" in member or "nature_reduce" in member:
+                boost_cn  = member.pop("nature_boost", None)
+                reduce_cn = member.pop("nature_reduce", None)
+                if boost_cn and reduce_cn:
+                    bk = _stat_cn.get(boost_cn)
+                    rk = _stat_cn.get(reduce_cn)
+                    if bk and rk:
+                        nature_name = _nature_by_stats.get((bk, rk))
+                        if nature_name:
+                            member["nature"] = nature_name
+                changed = True
+    return changed
 
 
 def _save() -> None:
@@ -122,11 +162,7 @@ def build_team(name: str) -> List[Pokemon]:
     if team_def is None:
         raise KeyError(f"队伍「{name}」不存在")
     return [
-        build_pokemon(
-            m["pokemon"], m["skills"],
-            nature_boost=m.get("nature_boost"),
-            nature_reduce=m.get("nature_reduce"),
-        )
+        build_pokemon(m["pokemon"], m["skills"], nature=m.get("nature"))
         for m in team_def["members"]
     ]
 

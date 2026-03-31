@@ -9,30 +9,29 @@ from typing import List, Optional
 from sim.types import Type, normalize_type
 from sim.pokemon import Pokemon
 from sim.skill_db import get_skill
-from sim.pokemon_db import get_pokemon, compute_stats_with_nature
+from sim.pokemon_db import get_pokemon, compute_stats_with_nature, NATURES
 from sim.team_builder_interactive import build_team_interactive  # noqa: F401
 
 
 def build_pokemon(
     name: str,
     skill_names: List[str],
-    nature_boost: Optional[str] = None,
-    nature_reduce: Optional[str] = None,
+    nature: Optional[str] = None,   # 命名性格，如 "开朗"
 ) -> Pokemon:
     """
     根据精灵名称从数据库获取六维数据，构造 Pokemon 对象。
 
-    nature_boost / nature_reduce 均为中文属性名（如"速度"/"魔攻"）。
-    提供时用自定义性格重新计算六维，否则使用数据库的自动性格。
+    nature 为性格名（来自 NATURES 表，如 "开朗"）。
+    提供时用对应性格重新计算六维，否则使用数据库的自动性格。
     """
     data = get_pokemon(name)
     if data:
         attrs: list = data.get("属性列表", [data.get("属性", "普通")])
         ability = data["特性"]
 
-        # 若指定了自定义性格，重新计算六维
-        if nature_boost and nature_reduce:
-            custom = compute_stats_with_nature(name, nature_boost, nature_reduce)
+        # 若指定了命名性格且合法，重新计算六维
+        if nature and nature in NATURES:
+            custom = compute_stats_with_nature(name, nature)
             if custom:
                 hp    = int(custom["生命值"])
                 atk   = int(custom["物攻"])
@@ -41,9 +40,9 @@ def build_pokemon(
                 spdef = int(custom["魔防"])
                 spd   = int(custom["速度"])
             else:
-                nature_boost = nature_reduce = None  # 回退到自动
+                nature = None   # 回退到自动
 
-        if not (nature_boost and nature_reduce):
+        if not (nature and nature in NATURES):
             hp    = int(data["生命值"])
             atk   = int(data["物攻"])
             dfn   = int(data["物防"])
