@@ -21,6 +21,24 @@ from typing import List, Optional, Tuple
 
 from sim.battle_state import BattleState
 from sim.battle_engine import BattleEngine, Action
+from sim.strategy import get_strategy_weights
+
+
+def _combine_weights(state, team, actions, experience_db, strategy) -> List[float]:
+    """策略权重 × 经验权重，两者都没有则均等。"""
+    n = len(actions)
+    if not actions:
+        return []
+
+    strat_w = get_strategy_weights(state, team, actions, strategy)
+    exp_w   = (experience_db.get_weights(state, team, actions)
+               if experience_db else [1.0] * n)
+
+    combined = [s * e for s, e in zip(strat_w, exp_w)]
+    # 保证至少有一个正权重
+    if max(combined) <= 0:
+        return [1.0] * n
+    return combined
 
 # UCB1 探索常数（√2 为理论最优，可调整）
 C_UCB1 = math.sqrt(2)
@@ -136,12 +154,14 @@ class MCTSSearch:
         iterations: int = 100,
         time_limit: Optional[float] = None,
         experience_db=None,
+        strategy=None,
         c: float = C_UCB1,
     ):
         self.team          = team
         self.iterations    = iterations
         self.time_limit    = time_limit
         self.experience_db = experience_db
+        self.strategy      = strategy   # 策略配置 dict 或 None
         self.c             = c
         self._opp_team     = "b" if team == "a" else "a"
 
@@ -223,14 +243,12 @@ class MCTSSearch:
         if not node.untried:
             return node
 
-        # 选择要展开的己方动作（可用 experience 加权）
-        if self.experience_db:
-            weights = self.experience_db.get_weights(
-                node.state, self.team, node.untried
-            )
-            my_action = random.choices(node.untried, weights=weights, k=1)[0]
-        else:
-            my_action = random.choice(node.untried)
+        # 选择要展开的己方动作（策略权重 × 经验权重）
+        weights = _combine_weights(
+            node.state, self.team, node.untried,
+            self.experience_db, self.strategy,
+        )
+        my_action = random.choices(node.untried, weights=weights, k=1)[0]
         node.untried.remove(my_action)
 
         # 采样对手动作
@@ -269,14 +287,12 @@ class MCTSSearch:
             my_actions  = engine.get_actions(self.team)
             opp_actions = engine.get_actions(self._opp_team)
 
-            # 己方：experience 加权
-            if self.experience_db and my_actions:
-                w  = self.experience_db.get_weights(sim_state, self.team, my_actions)
-                ma = random.choices(my_actions, weights=w, k=1)[0]
-            else:
-                ma = random.choice(my_actions) if my_actions else (-1,)
+            # 己方：策略权重 × 经验权重
+            w  = _combine_weights(sim_state, self.team, my_actions,
+                                  self.experience_db, self.strategy)
+            ma = random.choices(my_actions, weights=w, k=1)[0] if my_actions else (-1,)
 
-            # 对手：experience 加权
+            # 对手：仅经验权重（对手无策略文件）
             if self.experience_db and opp_actions:
                 w  = self.experience_db.get_weights(sim_state, self._opp_team, opp_actions)
                 oa = random.choices(opp_actions, weights=w, k=1)[0]

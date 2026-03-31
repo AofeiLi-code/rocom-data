@@ -17,6 +17,7 @@ from sim.battle_state import BattleState
 from sim.battle_engine import BattleEngine, Action
 from sim.mcts import MCTSSearch
 from sim.experience_db import ExperienceDB
+from sim.strategy import load_strategy, get_starter_idx
 
 
 # ============================================================
@@ -52,11 +53,17 @@ class MCTSAgent:
             print(f"  [MCTS] {team_name}（{team}）加载经验："
                   f"{self.experience_db.total_games} 局历史")
 
+        # 加载策略文件（找不到时为 None，静默忽略）
+        self.strategy = load_strategy(team_name)
+        if self.strategy:
+            print(f"  [策略] {team_name} 已加载策略配置")
+
         self._search = MCTSSearch(
             team=team,
             iterations=iterations,
             time_limit=time_limit,
             experience_db=self.experience_db,
+            strategy=self.strategy,
         )
 
     # ------------------------------------------------------------------
