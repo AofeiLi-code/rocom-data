@@ -59,12 +59,10 @@ def _hp_pct(pokemon) -> float:
 
 def _is_type_disadvantaged(me, opponent) -> bool:
     """对手场上精灵对我方有属性克制（承受 ≥2x 的伤害）"""
-    # 检查对手所有技能中，有没有克制我方的
     for skill in opponent.skills:
         eff = get_type_effectiveness(skill.skill_type, me.pokemon_type)
         if me.secondary_type:
-            from sim.damage_calc import _dual_type_effectiveness
-            eff = _dual_type_effectiveness(skill.skill_type, me.pokemon_type, me.secondary_type)
+            eff *= get_type_effectiveness(skill.skill_type, me.secondary_type)
         if eff >= 2.0:
             return True
     return False
