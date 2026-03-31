@@ -21,7 +21,7 @@ class BattleState:
     weather: Weather = Weather.NONE
     weather_turns: int = 0  # 天气剩余回合数（0 = 无天气）
     # roco-world 胜利条件：每方 4 格生命值
-    # 击倒对方一只精灵 → 对方 -1 格、己方 +1 格（上限 4）
+    # 己方精灵倒下 → 己方 -1 格（对方不变）
     # 生命格归 0 判负
     lives_a: int = 4
     lives_b: int = 4

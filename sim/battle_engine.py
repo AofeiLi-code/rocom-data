@@ -106,20 +106,18 @@ class BattleEngine:
     def _apply_life_events(self, snap_before, snap_after) -> None:
         """
         对比两个快照，结算新增倒下事件：
-        - 己方新倒下 → 己方 lives -1，对方 lives +1（上限 4）
+        - 精灵倒下方 lives -1，对方不变
         """
         new_fainted_a = snap_after[0] - snap_before[0]
         new_fainted_b = snap_after[1] - snap_before[1]
 
         for name in new_fainted_a:
             self.state.lives_a = max(0, self.state.lives_a - 1)
-            self.state.lives_b = min(4, self.state.lives_b + 1)
             self._log(f"  ⚡ {name} 倒下！"
                       f"  A队生命格:{self.state.lives_a}  B队生命格:{self.state.lives_b}")
 
         for name in new_fainted_b:
             self.state.lives_b = max(0, self.state.lives_b - 1)
-            self.state.lives_a = min(4, self.state.lives_a + 1)
             self._log(f"  ⚡ {name} 倒下！"
                       f"  A队生命格:{self.state.lives_a}  B队生命格:{self.state.lives_b}")
 
