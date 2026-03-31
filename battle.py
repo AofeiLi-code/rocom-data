@@ -26,6 +26,11 @@ from sim.team_builder_interactive import build_team_interactive
 from sim.team_roster import (
     list_teams, build_team, add_team, delete_team, rename_team, get_team_def
 )
+from sim.mcts_agent import MCTSAgent
+
+# MCTS 每回合迭代次数（可调整：50 快速 / 100 标准 / 200 强力）
+_MCTS_ITERS_BATTLE = 100   # 单局对战
+_MCTS_ITERS_BATCH  = 50    # 批量模拟（兼顾速度）
 
 _IMPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_images")
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -122,6 +127,10 @@ def run_battle(
         print(f"        vs  {team_b[0].name}[{', '.join(skills_b)}]")
         print(SEP)
 
+    agent_a = MCTSAgent("a", label_a, iterations=_MCTS_ITERS_BATTLE)
+    agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATTLE)
+    history = []
+
     winner = None
     for _ in range(BattleEngine.MAX_TURNS):
         winner = engine.check_winner()
@@ -129,13 +138,20 @@ def run_battle(
             break
         if verbose:
             _print_field(state, label_a, label_b)
-        engine.execute_turn(
-            random.choice(engine.get_actions("a")),
-            random.choice(engine.get_actions("b")),
-        )
+        snap     = state.deep_copy()
+        action_a = agent_a.choose_action(engine)
+        action_b = agent_b.choose_action(engine)
+        history.append((snap, action_a, action_b))
+        engine.execute_turn(action_a, action_b)
 
     if not winner:
         winner = engine.check_winner()
+
+    # 记录经验并保存
+    agent_a.experience_db.record_game(history, winner)
+    agent_b.experience_db.record_game(history, winner)
+    agent_a.save()
+    agent_b.save()
 
     if verbose:
         tag = f"{label_a} 赢！" if winner == "a" else (f"{label_b} 赢！" if winner == "b" else "平局/超时")
@@ -162,28 +178,38 @@ def run_batch(
     total_turns = 0
     t0 = time.time()
 
+    agent_a = MCTSAgent("a", label_a, iterations=_MCTS_ITERS_BATCH)
+    agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATCH)
+
     for i in range(n):
         state = BattleState(team_a=factory_a(), team_b=factory_b())
         engine = BattleEngine(state, verbose=False)
+        history = []
         winner = None
         for _ in range(BattleEngine.MAX_TURNS):
             winner = engine.check_winner()
             if winner:
                 break
-            engine.execute_turn(
-                random.choice(engine.get_actions("a")),
-                random.choice(engine.get_actions("b")),
-            )
+            snap     = state.deep_copy()
+            action_a = agent_a.choose_action(engine)
+            action_b = agent_b.choose_action(engine)
+            history.append((snap, action_a, action_b))
+            engine.execute_turn(action_a, action_b)
         if not winner:
             winner = engine.check_winner()
+        agent_a.experience_db.record_game(history, winner)
+        agent_b.experience_db.record_game(history, winner)
         total_turns += state.turn
         results[winner or "draw"] += 1
         if (i + 1) % max(1, n // 10) == 0:
             print(f"  ... {i+1}/{n}", flush=True)
 
+    agent_a.save()
+    agent_b.save()
+
     elapsed = time.time() - t0
     print(f"\n{SEP}")
-    print(f"  批量模拟结果（{n} 场）")
+    print(f"  批量模拟结果（{n} 场，MCTS×{_MCTS_ITERS_BATCH}）")
     print(f"  {label_a} 胜: {results['a']:4} 场  ({results['a']/n*100:.1f}%)")
     print(f"  {label_b} 胜: {results['b']:4} 场  ({results['b']/n*100:.1f}%)")
     print(f"  平局:     {results['draw']:4} 场  ({results['draw']/n*100:.1f}%)")
