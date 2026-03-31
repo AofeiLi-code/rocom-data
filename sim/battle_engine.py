@@ -82,12 +82,46 @@ class BattleEngine:
         return actions if actions else [(-1,)]
 
     def check_winner(self) -> Optional[str]:
-        """检查胜负：一方全灭则对方获胜"""
-        if all(p.is_fainted for p in self.state.team_a):
+        """
+        检查胜负（roco-world 4 格生命制）：
+        生命格归 0 的一方判负；若双方同时归 0 则后手方（本回合先击倒的）获胜。
+        兜底：若全队精灵均倒下也判负。
+        """
+        if self.state.lives_a <= 0 or all(p.is_fainted for p in self.state.team_a):
             return "b"
-        if all(p.is_fainted for p in self.state.team_b):
+        if self.state.lives_b <= 0 or all(p.is_fainted for p in self.state.team_b):
             return "a"
         return None
+
+    # ------------------------------------------------------------------
+    # 生命格结算
+    # ------------------------------------------------------------------
+    def _fainted_snapshot(self):
+        """返回 (frozenset_a, frozenset_b) — 当前已倒下精灵的名字集合"""
+        return (
+            frozenset(p.name for p in self.state.team_a if p.is_fainted),
+            frozenset(p.name for p in self.state.team_b if p.is_fainted),
+        )
+
+    def _apply_life_events(self, snap_before, snap_after) -> None:
+        """
+        对比两个快照，结算新增倒下事件：
+        - 己方新倒下 → 己方 lives -1，对方 lives +1（上限 4）
+        """
+        new_fainted_a = snap_after[0] - snap_before[0]
+        new_fainted_b = snap_after[1] - snap_before[1]
+
+        for name in new_fainted_a:
+            self.state.lives_a = max(0, self.state.lives_a - 1)
+            self.state.lives_b = min(4, self.state.lives_b + 1)
+            self._log(f"  ⚡ {name} 倒下！"
+                      f"  A队生命格:{self.state.lives_a}  B队生命格:{self.state.lives_b}")
+
+        for name in new_fainted_b:
+            self.state.lives_b = max(0, self.state.lives_b - 1)
+            self.state.lives_a = min(4, self.state.lives_a + 1)
+            self._log(f"  ⚡ {name} 倒下！"
+                      f"  A队生命格:{self.state.lives_a}  B队生命格:{self.state.lives_b}")
 
     def execute_turn(self, action_a: Action, action_b: Action) -> Optional[str]:
         """
@@ -101,24 +135,30 @@ class BattleEngine:
         first_team, first_act, second_team, second_act = \
             self._determine_order(action_a, action_b)
 
-        # 2. 先手行动
+        # 2. 先手行动（含生命格结算）
+        snap = self._fainted_snapshot()
         self._execute_action(first_team, first_act, second_team, second_act)
+        self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
 
         winner = self.check_winner()
         if winner:
             return winner
 
-        # 3. 后手行动
+        # 3. 后手行动（含生命格结算）
+        snap = self._fainted_snapshot()
         self._execute_action(second_team, second_act, first_team, first_act)
+        self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
 
         winner = self.check_winner()
         if winner:
             return winner
 
-        # 4. 回合结束效果
+        # 4. 回合结束效果（含生命格结算）
+        snap = self._fainted_snapshot()
         self._turn_end_effects()
+        self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
 
         # 5. 回合数 +1

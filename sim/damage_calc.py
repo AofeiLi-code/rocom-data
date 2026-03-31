@@ -90,10 +90,22 @@ def calculate_damage(
     stab = 1.5 if skill.skill_type in (attacker.pokemon_type, attacker.secondary_type) else 1.0
 
     # ------ 6. 属性克制 ------
-    # 双属性精灵：对主属性和副属性分别查表，两个倍率相乘
-    effectiveness = get_type_effectiveness(skill.skill_type, defender.pokemon_type)
-    if defender.secondary_type is not None:
-        effectiveness *= get_type_effectiveness(skill.skill_type, defender.secondary_type)
+    # roco-world 规则：
+    #   单属性弱点 / 抵抗：2x / 0.5x
+    #   双属性均弱（两个均 2x）→ 3x（强力克制，非乘算的 4x）
+    #   双属性均抵抗（两个均 0.5x）→ 0.25x（强力抵抗，与乘算结果相同）
+    #   其他组合：正常相乘
+    eff1 = get_type_effectiveness(skill.skill_type, defender.pokemon_type)
+    if defender.secondary_type is None:
+        effectiveness = eff1
+    else:
+        eff2 = get_type_effectiveness(skill.skill_type, defender.secondary_type)
+        if eff1 == 0 or eff2 == 0:
+            effectiveness = 0.0
+        elif eff1 >= 2.0 and eff2 >= 2.0:
+            effectiveness = 3.0   # 双弱 = 300%，而非乘算的 400%
+        else:
+            effectiveness = eff1 * eff2
 
     # ------ 7. 天气影响 ------
     weather_mult = 1.0

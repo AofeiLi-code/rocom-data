@@ -79,45 +79,90 @@ WEATHER_DURATION = 8  # 天气持续回合数
 
 
 # ============================================================
-# 属性克制表 (18x18，只记录非 1.0 的倍率)
+# 属性克制表 — 来源：roco-world skill 数据（仅记录非 1.0 的倍率）
+#
+# 数据格式：TYPE_CHART[攻击属性][防御属性] = 倍率
+# 倍率说明：
+#   2.0 = 克制（普通克制），3.0 由 damage_calc.py 在双弱时动态计算
+#   0.5 = 被抵抗
+#   roco-world 无免疫（0x），已移除原标准 Pokémon 的免疫条目
+#
+# 注意：光系（PSYCHIC）同时承载了游戏内 "光" 和 "幻" 两种属性的近似
+# （两种属性克制关系不同，此处以 "光" 系数据为准，"幻" 属性会有偏差）
 # ============================================================
 TYPE_CHART: Dict[str, Dict[str, float]] = {
-    "normal":   {"rock": 0.5, "ghost": 0, "steel": 0.5},
-    "fire":     {"fire": 0.5, "water": 0.5, "grass": 2, "ice": 2,
-                 "bug": 2, "rock": 0.5, "dragon": 0.5, "steel": 2},
-    "water":    {"fire": 2, "water": 0.5, "grass": 0.5,
-                 "ground": 2, "rock": 2, "dragon": 0.5},
-    "electric": {"water": 2, "electric": 0.5, "grass": 0.5,
-                 "ground": 0, "flying": 2, "dragon": 0.5},
-    "grass":    {"fire": 0.5, "water": 2, "grass": 0.5, "poison": 0.5,
-                 "ground": 2, "flying": 0.5, "bug": 0.5, "rock": 2,
-                 "dragon": 0.5, "steel": 0.5},
-    "ice":      {"fire": 0.5, "water": 0.5, "grass": 2, "ice": 0.5,
-                 "ground": 2, "flying": 2, "dragon": 2, "steel": 0.5},
-    "fighting": {"normal": 2, "ice": 2, "poison": 0.5, "flying": 0.5,
-                 "psychic": 0.5, "bug": 0.5, "rock": 2, "ghost": 0,
-                 "dark": 2, "steel": 2, "fairy": 0.5},
-    "poison":   {"grass": 2, "poison": 0.5, "ground": 0.5,
-                 "rock": 0.5, "ghost": 0.5, "steel": 0, "fairy": 2},
-    "ground":   {"fire": 2, "electric": 2, "grass": 0.5, "poison": 2,
-                 "flying": 0, "bug": 0.5, "rock": 2, "steel": 2},
-    "flying":   {"electric": 0.5, "grass": 2, "fighting": 2,
-                 "bug": 2, "rock": 0.5, "steel": 0.5},
-    "psychic":  {"fighting": 2, "poison": 2, "psychic": 0.5,
-                 "dark": 0, "steel": 0.5},
-    "bug":      {"fire": 0.5, "grass": 2, "fighting": 0.5, "poison": 0.5,
-                 "flying": 0.5, "ghost": 0.5, "psychic": 2, "dark": 2,
-                 "steel": 0.5, "fairy": 0.5},
-    "rock":     {"fire": 2, "ice": 2, "fighting": 0.5, "ground": 0.5,
-                 "flying": 2, "bug": 2, "steel": 0.5},
-    "ghost":    {"normal": 0, "psychic": 2, "ghost": 2, "dark": 0.5},
-    "dragon":   {"dragon": 2, "steel": 0.5, "fairy": 0},
-    "dark":     {"fighting": 0.5, "psychic": 2, "ghost": 2,
-                 "dark": 0.5, "fairy": 0.5},
-    "steel":    {"fire": 0.5, "water": 0.5, "electric": 0.5,
-                 "ice": 2, "rock": 2, "steel": 0.5, "fairy": 2},
-    "fairy":    {"fire": 0.5, "fighting": 2, "poison": 0.5,
-                 "dragon": 2, "dark": 2, "steel": 0.5},
+    # 普通系：对地/幽/机械 0.5x
+    "normal":   {"ground": 0.5, "ghost": 0.5, "steel": 0.5},
+
+    # 草系：克制水/幻(psychic)/地；被火/龙/毒/虫/翼/机械 0.5x
+    "grass":    {"water": 2, "psychic": 2, "ground": 2,
+                 "fire": 0.5, "dragon": 0.5, "poison": 0.5,
+                 "bug": 0.5, "flying": 0.5, "steel": 0.5},
+
+    # 火系：克制草/冰/虫/机械；被水/地/龙 0.5x
+    "fire":     {"grass": 2, "ice": 2, "bug": 2, "steel": 2,
+                 "water": 0.5, "ground": 0.5, "dragon": 0.5},
+
+    # 水系：克制火/地/机械；被草/冰/龙 0.5x
+    "water":    {"fire": 2, "ground": 2, "steel": 2,
+                 "grass": 0.5, "ice": 0.5, "dragon": 0.5},
+
+    # 光系（代理 "光" 属性）：克制幽/恶；被草/冰 0.5x
+    "psychic":  {"ghost": 2, "dark": 2,
+                 "grass": 0.5, "ice": 0.5},
+
+    # 地系：克制火/冰/电/毒；被草/武 0.5x
+    "ground":   {"fire": 2, "ice": 2, "electric": 2, "poison": 2,
+                 "grass": 0.5, "fighting": 0.5},
+
+    # 冰系：克制草/地/龙/翼；被火/冰/机械 0.5x
+    "ice":      {"grass": 2, "ground": 2, "dragon": 2, "flying": 2,
+                 "fire": 0.5, "ice": 0.5, "steel": 0.5},
+
+    # 龙系：克制龙；被机械 0.5x
+    "dragon":   {"dragon": 2,
+                 "steel": 0.5},
+
+    # 电系：克制水/翼；被草/地/龙/电 0.5x
+    "electric": {"water": 2, "flying": 2,
+                 "grass": 0.5, "ground": 0.5, "dragon": 0.5, "electric": 0.5},
+
+    # 毒系：克制草/萌；被地/毒/幽/机械 0.5x
+    "poison":   {"grass": 2, "fairy": 2,
+                 "ground": 0.5, "poison": 0.5, "ghost": 0.5, "steel": 0.5},
+
+    # 虫系：克制草/恶/幻(psychic)；被火/毒/武/翼/萌/幽/机械 0.5x
+    "bug":      {"grass": 2, "dark": 2, "psychic": 2,
+                 "fire": 0.5, "poison": 0.5, "fighting": 0.5,
+                 "flying": 0.5, "fairy": 0.5, "ghost": 0.5, "steel": 0.5},
+
+    # 武系：克制普通/地/冰/恶/机械；被毒/虫/翼/萌/幽/幻(psychic) 0.5x
+    "fighting": {"normal": 2, "ground": 2, "ice": 2, "dark": 2, "steel": 2,
+                 "poison": 0.5, "bug": 0.5, "flying": 0.5,
+                 "fairy": 0.5, "ghost": 0.5, "psychic": 0.5},
+
+    # 翼系：克制草/虫/武；被地/龙/电/机械 0.5x
+    "flying":   {"grass": 2, "bug": 2, "fighting": 2,
+                 "ground": 0.5, "dragon": 0.5, "electric": 0.5, "steel": 0.5},
+
+    # 萌系：克制龙/武/恶；被火/毒/机械 0.5x
+    "fairy":    {"dragon": 2, "fighting": 2, "dark": 2,
+                 "fire": 0.5, "poison": 0.5, "steel": 0.5},
+
+    # 幽系：克制光(psychic)/幽/幻(psychic)；被普通/恶 0.5x
+    "ghost":    {"psychic": 2, "ghost": 2,
+                 "normal": 0.5, "dark": 0.5},
+
+    # 恶系：克制毒/萌/幽；被光(psychic)/武/恶 0.5x
+    "dark":     {"poison": 2, "fairy": 2, "ghost": 2,
+                 "psychic": 0.5, "fighting": 0.5, "dark": 0.5},
+
+    # 机械系：克制地/冰/萌；被火/水/电/机械 0.5x
+    "steel":    {"ground": 2, "ice": 2, "fairy": 2,
+                 "fire": 0.5, "water": 0.5, "electric": 0.5, "steel": 0.5},
+
+    # 岩系：roco-world 未收录此属性，保留空表（全 1.0x 兜底）
+    "rock":     {},
 }
 
 

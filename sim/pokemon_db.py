@@ -72,8 +72,8 @@ def _compute_battle_stats(race_values: Dict[str, int]) -> Dict[str, int]:
         reduce_candidates = [s for s in stat_names if s != boost_stat]
     reduce_stat = random.choice(reduce_candidates)
 
-    nature[boost_stat] = 0.2
-    nature[reduce_stat] = -0.1
+    nature[boost_stat] = 0.1   # 真实游戏：性格提升 +10%（原误用 +20%）
+    nature[reduce_stat] = -0.1  # 真实游戏：性格降低 -10%
 
     _STAT_CN = {
         "hp": "生命", "atk": "物攻", "spatk": "魔攻",
