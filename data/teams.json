@@ -131,8 +131,7 @@
           "有效预防",
           "截拳"
         ],
-        "nature_boost": "物攻",
-        "nature_reduce": "魔防"
+        "nature": "调皮"
       },
       {
         "pokemon": "卡瓦重",
@@ -142,8 +141,7 @@
           "冰雹",
           "风矢"
         ],
-        "nature_boost": "速度",
-        "nature_reduce": "物攻"
+        "nature": "胆小"
       },
       {
         "pokemon": "恶魔狼",
@@ -152,9 +150,7 @@
           "火焰切割",
           "吞噬",
           "蝙蝠"
-        ],
-        "nature_boost": null,
-        "nature_reduce": null
+        ]
       },
       {
         "pokemon": "翼龙",
@@ -163,9 +159,7 @@
           "冰爪",
           "羽刃",
           "爆冲"
-        ],
-        "nature_boost": null,
-        "nature_reduce": null
+        ]
       },
       {
         "pokemon": "翠顶夫人",
@@ -175,8 +169,7 @@
           "水刃",
           "俯冲猛击"
         ],
-        "nature_boost": "速度",
-        "nature_reduce": "物攻"
+        "nature": "胆小"
       },
       {
         "pokemon": "音速犬",
@@ -186,8 +179,139 @@
           "跌落",
           "灼伤"
         ],
-        "nature_boost": "速度",
-        "nature_reduce": "物防"
+        "nature": "急躁"
+      }
+    ]
+  },
+  {
+    "name": "平衡狼王队",
+    "preset": false,
+    "members": [
+      {
+        "pokemon": "黑猫巫师",
+        "skills": [
+          "恐吓",
+          "魔法增效",
+          "魔能爆",
+          "彗星"
+        ],
+        "nature": "胆小"
+      },
+      {
+        "pokemon": "白金独角兽",
+        "skills": [
+          "超导",
+          "折射",
+          "折线冲击",
+          "气泡"
+        ],
+        "nature": "胆小"
+      },
+      {
+        "pokemon": "卡瓦重",
+        "skills": [
+          "筛管奔流",
+          "速冻",
+          "丰饶",
+          "冰雹"
+        ],
+        "nature": "开朗"
+      },
+      {
+        "pokemon": "朔夜伊芙",
+        "skills": [
+          "撕咬",
+          "啮合传递",
+          "击鼓传花",
+          "有效预防"
+        ],
+        "nature": "开朗"
+      },
+      {
+        "pokemon": "帕帕斯卡",
+        "skills": [
+          "俯冲猛击",
+          "齿轮扭矩",
+          "钢铁洪流",
+          "轴承支撑"
+        ],
+        "nature": "开朗"
+      },
+      {
+        "pokemon": "恶魔狼",
+        "skills": [
+          "蝙蝠",
+          "火焰切割",
+          "惊吓盒子",
+          "有效预防"
+        ],
+        "nature": "开朗"
+      }
+    ]
+  },
+  {
+    "name": "沙暴武",
+    "preset": false,
+    "members": [
+      {
+        "pokemon": "棋绮后",
+        "skills": [
+          "鸣沙陷阱",
+          "影袭",
+          "听桥",
+          "抛石"
+        ],
+        "nature": null
+      },
+      {
+        "pokemon": "巨噬针鼹",
+        "skills": [
+          "地刺",
+          "力量增效",
+          "当头棒喝",
+          "冰爪"
+        ],
+        "nature": null
+      },
+      {
+        "pokemon": "食尘短绒",
+        "skills": [
+          "地刺",
+          "沙涌",
+          "风墙",
+          "尾后针"
+        ],
+        "nature": null
+      },
+      {
+        "pokemon": "画间沉铁兽",
+        "skills": [
+          "截拳",
+          "先发制人",
+          "有效预防",
+          "力量增效"
+        ],
+        "nature": null
+      },
+      {
+        "pokemon": "帕帕斯卡",
+        "skills": [
+          "俯冲猛击",
+          "轴承支撑",
+          "齿轮扭矩",
+          "倾泻"
+        ],
+        "nature": null
+      },
+      {
+        "pokemon": "小皮球",
+        "skills": [
+          "超导",
+          "电磁偏转",
+          "加大功率",
+          "大爆炸"
+        ],
+        "nature": null
       }
     ]
   }
