@@ -76,6 +76,14 @@ class Pokemon:
     # 技能冷却 (技能索引 -> 剩余回合数)
     cooldowns: Dict[int, int] = field(default_factory=dict)
 
+    # 入场回合数（-1 = 未设置；特性"专注力"等需要判断首回合）
+    entry_turn: int = -1
+
+    # 嫁祸特性：连击加成（每穿越一个 25% HP 里程碑 +2）
+    hit_count_bonus: int = 0
+    # 嫁祸特性：已触发的 HP 里程碑位标志（bit0=75%, bit1=50%, bit2=25%）
+    hp_milestone_flags: int = 0
+
     def __post_init__(self):
         if self.current_hp == 0:
             self.current_hp = self.hp
@@ -240,4 +248,7 @@ class Pokemon:
         p.parasited_by = self.parasited_by
         p.power_bonus = self.power_bonus
         p.cooldowns = dict(self.cooldowns)
+        p.entry_turn = self.entry_turn
+        p.hit_count_bonus = self.hit_count_bonus
+        p.hp_milestone_flags = self.hp_milestone_flags
         return p

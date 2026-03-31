@@ -33,6 +33,8 @@ def calculate_damage(
     counter_power_mult: float = 1.0,
     damage_reductions: Optional[List[float]] = None,
     weather: Optional[Weather] = None,
+    extra_power_bonus: int = 0,
+    extra_hit_count: int = 0,
 ) -> int:
     """
     计算技能伤害（纯函数，不修改任何状态）。
@@ -64,7 +66,7 @@ def calculate_damage(
         def_base = 1
 
     # ------ 2. 有效威力 = 技能威力 × 应对倍率 + 威力加成 ------
-    effective_power = skill.power * counter_power_mult + attacker.power_bonus
+    effective_power = skill.power * counter_power_mult + attacker.power_bonus + extra_power_bonus
     if effective_power <= 0:
         return 0
 
@@ -121,7 +123,7 @@ def calculate_damage(
     # ------ 9. 汇总 ------
     single_hit = base * ability_level * stab * effectiveness * weather_mult * reduction_mult
 
-    # ------ 10. 连击 ------
-    total = single_hit * skill.hit_count
+    # ------ 10. 连击（含特性加成） ------
+    total = single_hit * (skill.hit_count + extra_hit_count)
 
     return max(1, int(total))

@@ -25,6 +25,7 @@ from sim.pokemon import Pokemon, ENERGY_MAX
 from sim.battle_state import BattleState
 from sim.damage_calc import calculate_damage
 from sim.counter_system import resolve_counter, CounterResult
+from sim.ability_engine import _ability_hooks
 
 
 # ============================================================
@@ -46,6 +47,8 @@ class BattleEngine:
         self.state = state
         self.verbose = verbose
         self.log: List[str] = []
+        # 为初始出战精灵设置入场回合（仅回合1且未设置时）
+        _ability_hooks.on_battle_start(state, self)
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -70,7 +73,7 @@ class BattleEngine:
         # 可用技能（考虑沙暴对地系技能的能耗减半）
         for i, skill in enumerate(current.skills):
             cd = current.cooldowns.get(i, 0)
-            cost = self._get_effective_energy_cost(skill)
+            cost = self._get_effective_energy_cost(skill, team)
             if current.energy >= cost and cd <= 0:
                 actions.append((i,))
 
@@ -115,11 +118,15 @@ class BattleEngine:
             self.state.lives_a = max(0, self.state.lives_a - 1)
             self._log(f"  ⚡ {name} 倒下！"
                       f"  A队生命格:{self.state.lives_a}  B队生命格:{self.state.lives_b}")
+            fainted_p = next((p for p in self.state.team_a if p.name == name), None)
+            _ability_hooks.on_faint(self.state, self, "a", fainted_p)
 
         for name in new_fainted_b:
             self.state.lives_b = max(0, self.state.lives_b - 1)
             self._log(f"  ⚡ {name} 倒下！"
                       f"  A队生命格:{self.state.lives_a}  B队生命格:{self.state.lives_b}")
+            fainted_p = next((p for p in self.state.team_b if p.name == name), None)
+            _ability_hooks.on_faint(self.state, self, "b", fainted_p)
 
     def execute_turn(self, action_a: Action, action_b: Action) -> Optional[str]:
         """
@@ -135,7 +142,7 @@ class BattleEngine:
 
         # 2. 先手行动（含生命格结算）
         snap = self._fainted_snapshot()
-        self._execute_action(first_team, first_act, second_team, second_act)
+        self._execute_action(first_team, first_act, second_team, second_act, is_first=True)
         self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
 
@@ -145,7 +152,7 @@ class BattleEngine:
 
         # 3. 后手行动（含生命格结算）
         snap = self._fainted_snapshot()
-        self._execute_action(second_team, second_act, first_team, first_act)
+        self._execute_action(second_team, second_act, first_team, first_act, is_first=False)
         self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
 
@@ -158,6 +165,8 @@ class BattleEngine:
         self._turn_end_effects()
         self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
+        # 星地善良：能量归零时换入小皮球（_auto_switch 之后，避免干扰倒下处理）
+        _ability_hooks.on_turn_end_switches(self.state, self)
 
         # 5. 回合数 +1
         self.state.turn += 1
@@ -173,12 +182,13 @@ class BattleEngine:
         self.state.weather_turns = WEATHER_DURATION
         self._log(f"  天气变为: {weather.value} (持续{WEATHER_DURATION}回合)")
 
-    def _get_effective_energy_cost(self, skill: Skill) -> int:
-        """获取有效能耗（沙暴下地系技能能耗减半）"""
+    def _get_effective_energy_cost(self, skill: Skill, team: str = "a") -> int:
+        """获取有效能耗（沙暴减半 + 印记修正）"""
         cost = skill.energy_cost
         if self.state.weather == Weather.SANDSTORM and skill.skill_type == Type.GROUND:
             cost = cost // 2  # 向下取整
-        return cost
+        cost += _ability_hooks.get_mark_energy_cost_mod(self.state, team, skill)
+        return max(0, cost)
 
     # ------------------------------------------------------------------
     # 先手判定
@@ -193,8 +203,8 @@ class BattleEngine:
         priority_a = self._get_priority("a", action_a)
         priority_b = self._get_priority("b", action_b)
 
-        spd_a = p_a.effective_speed() * (1.0 + priority_a)
-        spd_b = p_b.effective_speed() * (1.0 + priority_b)
+        spd_a = p_a.effective_speed() * (1.0 + priority_a) - _ability_hooks.get_mark_speed_penalty(self.state, "a")
+        spd_b = p_b.effective_speed() * (1.0 + priority_b) - _ability_hooks.get_mark_speed_penalty(self.state, "b")
 
         if spd_a >= spd_b:
             return "a", action_a, "b", action_b
@@ -202,12 +212,14 @@ class BattleEngine:
             return "b", action_b, "a", action_a
 
     def _get_priority(self, team: str, action: Action) -> float:
-        """获取先手修正值"""
+        """获取先手修正值（含特性加成）"""
         if action[0] < 0:
             return 0.0
         current = self.state.get_current(team)
         skill = current.skills[action[0]]
-        return skill.priority_mod * 0.1
+        base  = skill.priority_mod * 0.1
+        bonus = _ability_hooks.get_priority_bonus(self.state, team, action[0], skill)
+        return base + bonus
 
     # ------------------------------------------------------------------
     # 执行单个行动
@@ -218,6 +230,7 @@ class BattleEngine:
         action: Action,
         enemy_team: str,
         enemy_action: Action,
+        is_first: bool = False,
     ) -> None:
         """执行一方的行动 + 应对解析"""
         team_list = self.state.get_team(team)
@@ -242,14 +255,13 @@ class BattleEngine:
         skill = current.skills[action[0]]
 
         # ---- 能量不足 → 强制聚能 ----
-        cost = self._get_effective_energy_cost(skill)
+        cost = self._get_effective_energy_cost(skill, team)
         if current.energy < cost:
             old_e = current.energy
             current.gain_energy(self.GATHER_ENERGY)
             self._log(f"[{team.upper()}] {current.name} 能量不足({current.energy}<{cost})，改为聚能 (能量:{old_e}→{current.energy})")
             return
 
-        # 扣除能量（使用有效能耗）
         current.energy -= cost
 
         # ---- 脱离 ----
@@ -267,6 +279,7 @@ class BattleEngine:
         if skill.is_defense:
             old_hp = current.current_hp
             self._apply_defense_skill(current, skill, enemy_skill)
+            _ability_hooks.on_use_defense_skill(self.state, self, current, team)
             self._log(f"[{team.upper()}] {current.name} 使用 {skill.name}（防御 减伤{int(skill.damage_reduction*100)}%）")
             if current.current_hp > old_hp:
                 self._log(f"  → {current.name} 回复 {current.current_hp - old_hp} HP ({old_hp}→{current.current_hp})")
@@ -298,7 +311,7 @@ class BattleEngine:
             return
 
         # ---- 攻击技能 ----
-        self._apply_attack_skill(current, enemy, skill, enemy_skill, team)
+        self._apply_attack_skill(current, enemy, skill, enemy_skill, team, action[0], is_first=is_first)
         # 日志在 _apply_attack_skill 内部输出
 
     # ------------------------------------------------------------------
@@ -357,6 +370,8 @@ class BattleEngine:
         skill: Skill,
         enemy_skill: Optional[Skill],
         team: str = "a",
+        skill_idx: int = -1,
+        is_first: bool = False,
     ) -> None:
         """攻击技能：buff/debuff + 异常 + 能量 + 伤害 + 应对 + 吸血 + 回复"""
 
@@ -397,6 +412,11 @@ class BattleEngine:
         stab = skill.skill_type == attacker.pokemon_type
         stab_text = " 本系加成" if stab else ""
 
+        # 特性攻击修正
+        ability_mods = _ability_hooks.get_attack_mods(
+            self.state, self, attacker, defender, skill, skill_idx, team, is_first=is_first
+        )
+
         # 应对解析
         counter_power_mult = 1.0
         damage_reductions: List[float] = []
@@ -414,6 +434,7 @@ class BattleEngine:
                 attacker, defender, skill,
                 counter_power_mult=counter_power_mult,
                 weather=self.state.weather,
+                extra_power_bonus=ability_mods.power_flat_bonus,
             )
             counter_result = resolve_counter(
                 attacker, defender, skill, enemy_skill, dummy_dmg
@@ -428,16 +449,29 @@ class BattleEngine:
 
             reflect_damage = counter_result.reflect_damage
 
-        # 最终伤害计算
+        # 特性防御修正
+        ability_def_reductions = _ability_hooks.get_defense_mods(
+            self.state, self, attacker, defender, skill, team
+        )
+        damage_reductions.extend(ability_def_reductions)
+
+        # 最终伤害计算（合并特性威力倍率 + 嫁祸连击加成）
+        combined_power_mult = counter_power_mult * ability_mods.power_mult
+        extra_hits = _ability_hooks.get_extra_hit_count(
+            self.state, attacker, skill, skill_idx
+        )
         damage = calculate_damage(
             attacker, defender, skill,
-            counter_power_mult=counter_power_mult,
+            counter_power_mult=combined_power_mult,
             damage_reductions=damage_reductions if damage_reductions else None,
             weather=self.state.weather,
+            extra_power_bonus=ability_mods.power_flat_bonus,
+            extra_hit_count=extra_hits,
         )
 
         # 日志：谁用了什么技能
-        hit_text = f" {skill.hit_count}连击" if skill.hit_count > 1 else ""
+        total_hits = skill.hit_count + extra_hits
+        hit_text = f" {total_hits}连击" if total_hits > 1 else ""
         self._log(f"[{team.upper()}] {attacker.name} 使用 {skill.name}（{skill.category.value} {skill.skill_type.value}系 威力{skill.power}）{hit_text}")
 
         # 6. 扣血
@@ -445,6 +479,17 @@ class BattleEngine:
         actual_damage = defender.take_damage(damage)
         fainted_text = " → 倒下！" if defender.is_fainted else ""
         self._log(f"  → 对 {defender.name} 造成 {actual_damage} 点伤害 [{eff_text}{stab_text}{counter_text}] (HP: {hp_before}→{defender.current_hp}/{defender.hp}){fainted_text}")
+
+        # 6b. 嫁祸里程碑检查（防守方）
+        _ability_hooks.on_defender_damaged(
+            self.state, self, defender, hp_before, defender.current_hp
+        )
+
+        # 6c. 特性攻击后效果
+        _ability_hooks.on_post_attack(
+            self.state, self, attacker, defender, skill, skill_idx,
+            actual_damage, team, counter_power_mult > 1.0
+        )
 
         # 7. 反弹伤害
         if reflect_damage > 0:
@@ -488,8 +533,11 @@ class BattleEngine:
             user.gain_energy(skill.self_heal_energy)
 
     def _apply_switch(self, team: str, target_idx: int) -> None:
-        """换人"""
+        """换人（触发换出/换入特性）"""
+        old_idx = self.state.get_current_idx(team)
+        _ability_hooks.on_switch_out(self.state, self, team, old_idx, target_idx)
         self.state.set_current_idx(team, target_idx)
+        _ability_hooks.on_switch_in(self.state, self, team, target_idx)
 
     def _apply_escape(self, team: str, team_list: List[Pokemon], current_idx: int) -> None:
         """脱离：随机切换到一个存活队友"""
@@ -561,8 +609,13 @@ class BattleEngine:
                 if dmg > 0:
                     p.take_damage(dmg)
                     self._log(f"  {p.name} 烧伤伤害 {dmg} ({p.burn_stacks}层)")
-                # 层数减半（向下取整）
-                p.burn_stacks = p.burn_stacks // 2
+                # 燃薪虫[煤渣草]在场时增长而非衰减
+                if _ability_hooks.intercept_burn_decay(self.state, self, p):
+                    p.burn_stacks += 1
+                    self._log(f"  {p.name} 烧伤增长（煤渣草）→ {p.burn_stacks}层")
+                else:
+                    # 层数减半（向下取整）
+                    p.burn_stacks = p.burn_stacks // 2
 
             if p.is_fainted:
                 continue
@@ -617,6 +670,9 @@ class BattleEngine:
             for k in expired:
                 del p.cooldowns[k]
 
+        # --- 7. 回合结束特性效果（蚀刻转化 / 特殊清洁场景 / 印记伤害） ---
+        _ability_hooks.on_turn_end(self.state, self)
+
     def _apply_weather_effects(self) -> None:
         """应用天气回合结束效果"""
         weather = self.state.weather
@@ -635,7 +691,7 @@ class BattleEngine:
     # 自动换人
     # ------------------------------------------------------------------
     def _auto_switch(self) -> None:
-        """当前精灵倒下时，自动切换到第一个存活精灵"""
+        """当前精灵倒下时，自动切换到第一个存活精灵（触发换入特性）"""
         for team in ("a", "b"):
             team_list = self.state.get_team(team)
             idx = self.state.get_current_idx(team)
@@ -643,6 +699,7 @@ class BattleEngine:
                 alive = [i for i, p in enumerate(team_list) if not p.is_fainted]
                 if alive:
                     self.state.set_current_idx(team, alive[0])
+                    _ability_hooks.on_switch_in(self.state, self, team, alive[0])
 
     # ------------------------------------------------------------------
     # 日志

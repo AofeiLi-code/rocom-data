@@ -2,11 +2,12 @@
 NRC_SIM 战斗状态容器
 """
 
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 from sim.pokemon import Pokemon
 from sim.types import Weather
+from sim.mark_system import TeamMark, MarkCategory, MarkType
 
 
 @dataclass
@@ -25,6 +26,17 @@ class BattleState:
     # 生命格归 0 判负
     lives_a: int = 4
     lives_b: int = 4
+
+    # 特性计数器 (精灵名 -> 整数计数)，用于需要积累效果的特性
+    ability_counters: Dict[str, int] = field(default_factory=dict)
+
+    # 队伍印记（每队分正面/负面各一槽）
+    # 正面印记：湿润/龙噬/蓄势/风起/蓄电/光合/攻击
+    # 负面印记：减速/降灵/星陨/中毒/棘刺
+    pos_mark_a: Optional[TeamMark] = None   # A队正面印记
+    neg_mark_a: Optional[TeamMark] = None   # A队负面印记
+    pos_mark_b: Optional[TeamMark] = None   # B队正面印记
+    neg_mark_b: Optional[TeamMark] = None   # B队负面印记
 
     # ------------------------------------------------------------------
     # 便捷访问
@@ -53,6 +65,59 @@ class BattleState:
         return "b" if team == "a" else "a"
 
     # ------------------------------------------------------------------
+    # 印记访问与操作
+    # ------------------------------------------------------------------
+    def get_mark(self, team: str, category: MarkCategory) -> Optional[TeamMark]:
+        """获取指定队伍指定类别的印记"""
+        if category == MarkCategory.POSITIVE:
+            return self.pos_mark_a if team == "a" else self.pos_mark_b
+        else:
+            return self.neg_mark_a if team == "a" else self.neg_mark_b
+
+    def set_mark(self, team: str, mark: TeamMark) -> None:
+        """
+        为指定队伍设置印记。
+        同类别的旧印记直接被覆盖（异种顶替），
+        同种印记则叠加层数。
+        """
+        cat = mark.category
+        existing = self.get_mark(team, cat)
+        if existing is not None and existing.mark_type == mark.mark_type:
+            # 同种印记 → 叠层
+            existing.stacks += mark.stacks
+            return
+        # 不同种或无旧印记 → 覆盖/新建
+        if cat == MarkCategory.POSITIVE:
+            if team == "a":
+                self.pos_mark_a = mark
+            else:
+                self.pos_mark_b = mark
+        else:
+            if team == "a":
+                self.neg_mark_a = mark
+            else:
+                self.neg_mark_b = mark
+
+    def clear_mark(self, team: str, category: MarkCategory) -> None:
+        """清除指定队伍指定类别的印记"""
+        if category == MarkCategory.POSITIVE:
+            if team == "a":
+                self.pos_mark_a = None
+            else:
+                self.pos_mark_b = None
+        else:
+            if team == "a":
+                self.neg_mark_a = None
+            else:
+                self.neg_mark_b = None
+
+    def get_positive_mark(self, team: str) -> Optional[TeamMark]:
+        return self.pos_mark_a if team == "a" else self.pos_mark_b
+
+    def get_negative_mark(self, team: str) -> Optional[TeamMark]:
+        return self.neg_mark_a if team == "a" else self.neg_mark_b
+
+    # ------------------------------------------------------------------
     # 深复制（MCTS 专用，比 copy.deepcopy 快 3-5x）
     # ------------------------------------------------------------------
     def deep_copy(self) -> "BattleState":
@@ -66,4 +131,9 @@ class BattleState:
             weather_turns=self.weather_turns,
             lives_a=self.lives_a,
             lives_b=self.lives_b,
+            ability_counters=dict(self.ability_counters),
+            pos_mark_a=self.pos_mark_a.copy() if self.pos_mark_a else None,
+            neg_mark_a=self.neg_mark_a.copy() if self.neg_mark_a else None,
+            pos_mark_b=self.pos_mark_b.copy() if self.pos_mark_b else None,
+            neg_mark_b=self.neg_mark_b.copy() if self.neg_mark_b else None,
         )
