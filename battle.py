@@ -28,9 +28,9 @@ from sim.team_roster import (
 )
 from sim.mcts_agent import MCTSAgent
 
-# MCTS 每回合迭代次数（可调整：50 快速 / 100 标准 / 200 强力）
+# MCTS 每回合迭代次数（可调整：20 快速 / 100 标准 / 200 强力）
 _MCTS_ITERS_BATTLE = 100   # 单局对战
-_MCTS_ITERS_BATCH  = 50    # 批量模拟（兼顾速度）
+_MCTS_ITERS_BATCH  = 20    # 批量模拟（优先速度，仍有学习效果）
 
 _IMPORT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "import_images")
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -201,8 +201,17 @@ def run_batch(
         agent_b.experience_db.record_game(history, winner)
         total_turns += state.turn
         results[winner or "draw"] += 1
-        if (i + 1) % max(1, n // 10) == 0:
-            print(f"  ... {i+1}/{n}", flush=True)
+        elapsed_so_far = time.time() - t0
+        rate = elapsed_so_far / (i + 1)
+        eta  = rate * (n - i - 1)
+        bar_filled = int(20 * (i + 1) / n)
+        bar = "#" * bar_filled + "." * (20 - bar_filled)
+        print(
+            f"\r  [{bar}] {i+1:4}/{n}  "
+            f"A:{results['a']} B:{results['b']} 平:{results['draw']}  "
+            f"ETA:{eta:.0f}s ",
+            end="", flush=True,
+        )
 
     agent_a.save()
     agent_b.save()
