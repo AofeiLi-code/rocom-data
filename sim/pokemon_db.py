@@ -278,11 +278,11 @@ def compute_stats_with_nature(name: str, boost_cn: str, reduce_cn: str) -> Optio
     else:
         iv["def" if race["def"] >= race["spdef"] else "spdef"] = 10
 
-    # 自定义性格
+    # 自定义性格（与自动性格保持一致：+10% / -10%）
     boost_key  = _STAT_CN_TO_KEY.get(boost_cn, "speed")
     reduce_key = _STAT_CN_TO_KEY.get(reduce_cn, "spatk")
     nature = {s: 0.0 for s in stat_names}
-    nature[boost_key] = 0.2
+    nature[boost_key] = 0.1
     if reduce_key != boost_key:
         nature[reduce_key] = -0.1
 
