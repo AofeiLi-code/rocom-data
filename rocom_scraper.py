@@ -363,12 +363,11 @@ def parse_evolution_chain(soup: BeautifulSoup) -> list[dict] | None:
             condition = cond_p.get_text(strip=True)
 
     # 组装：每个非首阶段附上进化到它的等级/条件
-    result = [{"name": stages[0]["name"], "id": stages[0]["id"], "evolves_from": None, "level": None, "condition": None}]
+    result = [{"name": stages[0]["name"], "no": None, "evolves_from": None, "level": None, "condition": None}]
     for i, stage in enumerate(stages[1:]):
         level = levels[i] if i < len(levels) else None
-        # 最后一段进化才附条件（条件通常描述最终进化）
         cond = condition if i == len(stages) - 2 else None
-        result.append({"name": stage["name"], "id": stage["id"], "evolves_from": stages[i]["name"], "level": level, "condition": cond})
+        result.append({"name": stage["name"], "no": None, "evolves_from": stages[i]["name"], "level": level, "condition": cond})
 
     return result
 
@@ -549,7 +548,10 @@ def main():
 
         time.sleep(random.uniform(args.delay, args.delay + 1.5))
 
-    # 3. 最终保存
+    # 3. 回填进化链 id（名字 → no）
+    _backfill_evolution_ids(results)
+
+    # 4. 最终保存
     _save(results, out_path)
     csv_path = out_path.with_suffix(".csv")
     _save_csv(results, csv_path)
@@ -562,6 +564,14 @@ def main():
         fail_path = out_path.with_name("failed_urls.txt")
         fail_path.write_text("\n".join(failed))
         print(f"[完成] 失败URL已记录至: {fail_path}")
+
+
+def _backfill_evolution_ids(results: list):
+    """用名字→no映射回填进化链中的no字段"""
+    name_to_no = {s["name"]: s["no"] for s in results if s.get("name")}
+    for s in results:
+        for stage in (s.get("evolution_chain") or []):
+            stage["no"] = name_to_no.get(stage["name"])
 
 
 def _save(data: list, path: Path):
