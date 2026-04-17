@@ -567,8 +567,14 @@ def main():
 
 
 def _backfill_evolution_ids(results: list):
-    """用名字→no映射回填进化链中的no字段"""
-    name_to_no = {s["name"]: s["no"] for s in results if s.get("name")}
+    """用名字→no映射回填进化链中的no字段，支持有form的精灵"""
+    name_to_no = {}
+    for s in results:
+        if not s.get("name"):
+            continue
+        name_to_no[s["name"]] = s["no"]
+        if s.get("form"):
+            name_to_no[f"{s['name']}（{s['form']}）"] = s["no"]
     for s in results:
         for stage in (s.get("evolution_chain") or []):
             stage["no"] = name_to_no.get(stage["name"])
