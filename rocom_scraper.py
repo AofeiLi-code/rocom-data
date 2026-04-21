@@ -54,7 +54,7 @@ SESSION.headers.update(HEADERS)
 def print_progress(current: int, total: int, label: str = "", width: int = 28):
     """用 \\r 在同一行覆写进度条"""
     filled = int(width * current / total) if total > 0 else 0
-    bar = "█" * filled + "░" * (width - filled)
+    bar = "#" * filled + "-" * (width - filled)
     pct = current / total * 100 if total > 0 else 0
     label = (label[:32] + "…") if len(label) > 33 else label
     print(f"\r[{current:>4}/{total}] {bar} {pct:5.1f}%  {label}    ", end="", flush=True)
@@ -110,35 +110,31 @@ def parse_list_page() -> list[dict]:
     soup = fetch(LIST_URL)
 
     entries = []
-    # 每个精灵卡片在 <td> 内, 链接格式: /rocom/精灵名
     content = soup.find("div", id="mw-content-text") or soup
-    for td in content.select("table td"):
-        # 找 NO.xxx
-        no_text = td.get_text(" ", strip=True)
-        no_m = re.search(r'NO\.(\d+)', no_text)
+    for card in content.select("div.rocom_prop_img"):
+        # NO编号
+        no_span = card.find("span", style=re.compile(r'font-size:10px'))
+        if not no_span:
+            continue
+        no_m = re.search(r'NO\.(\d+)', no_span.get_text())
         if not no_m:
             continue
         no = int(no_m.group(1))
 
-        # 找主链接 (精灵页面)
-        links = td.find_all("a", href=re.compile(r'^/rocom/[^%]|^/rocom/%'))
-        if not links:
+        # 主链接
+        a = card.find("a", href=re.compile(r'^/rocom/'))
+        if not a:
             continue
-        href = links[0]["href"]
+        href = a["href"]
         url = urljoin(BASE_URL, href)
-        name_raw = unquote(href.split("/rocom/")[-1])
 
-        # 区分本体名和形态名: "鸭吉吉（蓬松的样子）"
-        form_m = re.match(r'^(.+?)（(.+)）$', name_raw)
-        if form_m:
-            name = form_m.group(1)
-            form = form_m.group(2)
-        else:
-            name = name_raw
-            form = None
+        # 名字从 block_2，形态从 block_3
+        name_p = card.find("p", class_="block_2")
+        name = name_p.get_text(strip=True) if name_p else unquote(href.split("/rocom/")[-1])
+        form_p = card.find("p", class_="block_3")
+        form = form_p.get_text(strip=True) or None if form_p else None
 
-        # 是否有异色图
-        has_shiny = "异色" in td.get_text()
+        has_shiny = "异色" in card.get_text()
 
         entries.append({
             "no": no,
@@ -328,6 +324,54 @@ def parse_attributes_from_detail(soup: BeautifulSoup) -> list[str]:
     return attrs
 
 
+def parse_evolution_chain(soup: BeautifulSoup) -> list[dict] | None:
+    """解析进化链，返回 [{name, id, condition}, ...] 或 None"""
+    box = soup.find("div", class_="rocom_spirit_evolution_box")
+    if not box:
+        return None
+
+    # 收集各阶段精灵
+    stages = []
+    for i in range(1, 4):
+        div = box.find("div", class_=f"rocom_spirit_evolution_{i}")
+        if not div:
+            break
+        a = div.find("a")
+        if not a:
+            break
+        name = a.get("title", "")
+        href = a.get("href", "")
+        sprite_id = unquote(href.split("/rocom/")[-1]) if "/rocom/" in href else name
+        stages.append({"name": name, "id": sprite_id})
+
+    if len(stages) <= 1:
+        return None
+
+    # 进化等级：在 evolution_1 和 evolution_2 之间，evolution_2 和 evolution_3 之间
+    level_divs = box.find_all("div", class_="rocom_spirit_evolution_level")
+    levels = []
+    for ld in level_divs:
+        p = ld.find("p", class_="rocom_spirit_evolution_level_num")
+        levels.append(p.get_text(strip=True) if p else None)
+
+    # 进化条件（整个 rightBox 范围内）
+    rightbox = soup.find("div", class_="rocom_sprite_temp_evolve_rightBox")
+    condition = None
+    if rightbox:
+        cond_p = rightbox.find("p", class_="rocom_evolution_data")
+        if cond_p:
+            condition = cond_p.get_text(strip=True)
+
+    # 组装：每个非首阶段附上进化到它的等级/条件
+    result = [{"name": stages[0]["name"], "no": None, "evolves_from": None, "level": None, "condition": None}]
+    for i, stage in enumerate(stages[1:]):
+        level = levels[i] if i < len(levels) else None
+        cond = condition if i == len(stages) - 2 else None
+        result.append({"name": stage["name"], "no": None, "evolves_from": stages[i]["name"], "level": level, "condition": cond})
+
+    return result
+
+
 def parse_sprite_detail(entry: dict) -> dict:
     """爬取并解析单个精灵的详情页"""
     soup = fetch(entry["url"])
@@ -370,6 +414,9 @@ def parse_sprite_detail(entry: dict) -> dict:
     # 克制关系
     matchup = parse_type_matchup(content)
 
+    # 进化链
+    evolution_chain = parse_evolution_chain(content)
+
     # 技能
     skills = parse_skills(content)
 
@@ -379,6 +426,7 @@ def parse_sprite_detail(entry: dict) -> dict:
         "stats": stats,
         "ability": ability,
         "type_matchup": matchup,
+        "evolution_chain": evolution_chain,
         "skills": skills,
     }
 
@@ -500,7 +548,10 @@ def main():
 
         time.sleep(random.uniform(args.delay, args.delay + 1.5))
 
-    # 3. 最终保存
+    # 3. 回填进化链 id（名字 → no）
+    _backfill_evolution_ids(results)
+
+    # 4. 最终保存
     _save(results, out_path)
     csv_path = out_path.with_suffix(".csv")
     _save_csv(results, csv_path)
@@ -513,6 +564,20 @@ def main():
         fail_path = out_path.with_name("failed_urls.txt")
         fail_path.write_text("\n".join(failed))
         print(f"[完成] 失败URL已记录至: {fail_path}")
+
+
+def _backfill_evolution_ids(results: list):
+    """用名字→no映射回填进化链中的no字段，支持有form的精灵"""
+    name_to_no = {}
+    for s in results:
+        if not s.get("name"):
+            continue
+        name_to_no[s["name"]] = s["no"]
+        if s.get("form"):
+            name_to_no[f"{s['name']}（{s['form']}）"] = s["no"]
+    for s in results:
+        for stage in (s.get("evolution_chain") or []):
+            stage["no"] = name_to_no.get(stage["name"])
 
 
 def _save(data: list, path: Path):
@@ -530,6 +595,7 @@ CSV_COLUMNS = [
     "hp", "atk", "sp_atk", "def", "sp_def", "spd",
     "ability_name", "ability_desc",
     "strong_against", "weak_to", "resists", "resisted_by",
+    "evolution_chain",
     "skills",
 ]
 
@@ -569,6 +635,10 @@ def _sprite_to_csv_row(d: dict) -> dict:
         "weak_to":        ",".join(matchup.get("weak_to") or []),
         "resists":        ",".join(matchup.get("resists") or []),
         "resisted_by":    ",".join(matchup.get("resisted_by") or []),
+        "evolution_chain": ";".join(
+            f"{e['name']}({e.get('level') or ''}/{e.get('condition') or ''})"
+            for e in (d.get("evolution_chain") or [])
+        ),
         "skills":         ";".join(skill_str(s) for s in (d.get("skills") or [])),
     }
 
