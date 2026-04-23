@@ -66,8 +66,8 @@ pip install -r requirements.txt
 ### 方式二：命令行
 
 ```bash
-python rocom_scraper.py                 # 全量爬取
-python rocom_scraper.py --check-update  # 检查更新
+python rocom_scraper.py                 # 全量爬取（自动跳过已有精灵）
+python rocom_scraper.py --force         # 强制重爬所有精灵
 python viewer.py                        # 图鉴查看器
 python battle.py                        # 战斗模拟器（含 AI 对战）
 python train.py                         # 批量训练 MCTS AI
@@ -262,14 +262,19 @@ v2.0 的目标是接入 **游戏画面实时读取**，让 AI 真正用于游戏
 | `--limit N` | 只爬前 N 只精灵（调试用） | 0（全部） |
 | `--delay N` | 每次请求间隔下限（秒），实际为 `delay ~ delay+1.5` 随机值 | 1.5 |
 | `--output path` | 输出 JSON 的路径 | `data/sprites.json` |
-| `--check-update` | 增量更新模式 | — |
+| `--force` | 强制重爬所有精灵，并重新下载所有图片（忽略已有缓存） | — |
+
+默认情况下，爬虫会自动跳过本地 `sprites.json` 中已存在的精灵，只爬取新增内容。使用 `--force` 可强制全量重爬。
 
 ### 输出文件
 
 | 文件 | 说明 |
 |------|------|
-| `data/sprites.json` | 完整精灵数据，嵌套 JSON |
+| `data/sprites.json` | 完整精灵数据，嵌套 JSON（含技能等级、特性） |
 | `data/sprites.csv` | 扁平化 CSV，可用 Excel / pandas 打开 |
+| `data/skills.csv` | 全技能去重列表（列名同 `skills_all.csv`） |
+| `data/urls.csv` | 爬取到的图片 URL 及本地路径，边爬边更新 |
+| `data/images/` | 下载的图片，按类型分子目录（sprites/skills/attributes/abilities/matchup） |
 | `data/sprites.backup.json` | 每次爬取前自动备份的上一版 |
 
 ### 爬虫数据与战斗模拟器的同步关系
