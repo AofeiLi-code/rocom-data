@@ -54,7 +54,7 @@ SESSION.headers.update(HEADERS)
 def print_progress(current: int, total: int, label: str = "", width: int = 28):
     """用 \\r 在同一行覆写进度条"""
     filled = int(width * current / total) if total > 0 else 0
-    bar = "█" * filled + "░" * (width - filled)
+    bar = "#" * filled + "-" * (width - filled)
     pct = current / total * 100 if total > 0 else 0
     label = (label[:32] + "…") if len(label) > 33 else label
     print(f"\r[{current:>4}/{total}] {bar} {pct:5.1f}%  {label}    ", end="", flush=True)
@@ -110,25 +110,21 @@ def parse_list_page() -> list[dict]:
     soup = fetch(LIST_URL)
 
     entries = []
-    # 每个精灵卡片在 <td> 内, 链接格式: /rocom/精灵名
     content = soup.find("div", id="mw-content-text") or soup
-    for td in content.select("table td"):
-        # 找 NO.xxx
-        no_text = td.get_text(" ", strip=True)
-        no_m = re.search(r'NO\.(\d+)', no_text)
+    # 每个精灵是 <a href="/rocom/NAME"><span>NO.xxx</span>...</a>
+    for a in content.find_all("a", href=re.compile(r'^/rocom/')):
+        span = a.find("span", string=re.compile(r'^NO\.\d+'))
+        if not span:
+            continue
+        no_m = re.search(r'NO\.(\d+)', span.get_text())
         if not no_m:
             continue
         no = int(no_m.group(1))
 
-        # 找主链接 (精灵页面)
-        links = td.find_all("a", href=re.compile(r'^/rocom/[^%]|^/rocom/%'))
-        if not links:
-            continue
-        href = links[0]["href"]
+        href = a["href"]
         url = urljoin(BASE_URL, href)
         name_raw = unquote(href.split("/rocom/")[-1])
 
-        # 区分本体名和形态名: "鸭吉吉（蓬松的样子）"
         form_m = re.match(r'^(.+?)（(.+)）$', name_raw)
         if form_m:
             name = form_m.group(1)
@@ -137,8 +133,7 @@ def parse_list_page() -> list[dict]:
             name = name_raw
             form = None
 
-        # 是否有异色图
-        has_shiny = "异色" in td.get_text()
+        has_shiny = "异色" in a.get_text()
 
         entries.append({
             "no": no,
@@ -279,12 +274,13 @@ def parse_skills(soup: BeautifulSoup) -> list[dict]:
             else:
                 category = ""
 
-            # 威力: 类别图后的数字
+            # 威力: rocom_sprite_skill_power div 内的数字
             power = 0
-            if category_img:
-                sib = category_img.find_next_sibling(string=True)
-                if sib and sib.strip().lstrip('-').isdigit():
-                    power = int(sib.strip())
+            power_div = container.find(class_="rocom_sprite_skill_power")
+            if power_div:
+                pt = power_div.get_text(strip=True)
+                if pt.lstrip('-').isdigit():
+                    power = int(pt)
 
             # 描述: ✦ 开头的文本
             full_text = container.get_text(" ", strip=True)
@@ -303,7 +299,13 @@ def parse_skills(soup: BeautifulSoup) -> list[dict]:
         except Exception:
             continue
 
-    return skills
+    seen = set()
+    deduped = []
+    for sk in skills:
+        if sk["name"] not in seen:
+            seen.add(sk["name"])
+            deduped.append(sk)
+    return deduped
 
 
 def parse_attributes_from_detail(soup: BeautifulSoup) -> list[str]:
