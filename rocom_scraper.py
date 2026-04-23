@@ -111,30 +111,29 @@ def parse_list_page() -> list[dict]:
 
     entries = []
     content = soup.find("div", id="mw-content-text") or soup
-    for card in content.select("div.rocom_prop_img"):
-        # NO编号
-        no_span = card.find("span", style=re.compile(r'font-size:10px'))
-        if not no_span:
+    # 每个精灵是 <a href="/rocom/NAME"><span>NO.xxx</span>...</a>
+    for a in content.find_all("a", href=re.compile(r'^/rocom/')):
+        span = a.find("span", string=re.compile(r'^NO\.\d+'))
+        if not span:
             continue
-        no_m = re.search(r'NO\.(\d+)', no_span.get_text())
+        no_m = re.search(r'NO\.(\d+)', span.get_text())
         if not no_m:
             continue
         no = int(no_m.group(1))
 
-        # 主链接
-        a = card.find("a", href=re.compile(r'^/rocom/'))
-        if not a:
-            continue
         href = a["href"]
         url = urljoin(BASE_URL, href)
+        name_raw = unquote(href.split("/rocom/")[-1])
 
-        # 名字从 block_2，形态从 block_3
-        name_p = card.find("p", class_="block_2")
-        name = name_p.get_text(strip=True) if name_p else unquote(href.split("/rocom/")[-1])
-        form_p = card.find("p", class_="block_3")
-        form = form_p.get_text(strip=True) or None if form_p else None
+        form_m = re.match(r'^(.+?)（(.+)）$', name_raw)
+        if form_m:
+            name = form_m.group(1)
+            form = form_m.group(2)
+        else:
+            name = name_raw
+            form = None
 
-        has_shiny = "异色" in card.get_text()
+        has_shiny = "异色" in a.get_text()
 
         entries.append({
             "no": no,
@@ -275,12 +274,13 @@ def parse_skills(soup: BeautifulSoup) -> list[dict]:
             else:
                 category = ""
 
-            # 威力: 类别图后的数字
+            # 威力: rocom_sprite_skill_power div 内的数字
             power = 0
-            if category_img:
-                sib = category_img.find_next_sibling(string=True)
-                if sib and sib.strip().lstrip('-').isdigit():
-                    power = int(sib.strip())
+            power_div = container.find(class_="rocom_sprite_skill_power")
+            if power_div:
+                pt = power_div.get_text(strip=True)
+                if pt.lstrip('-').isdigit():
+                    power = int(pt)
 
             # 描述: ✦ 开头的文本
             full_text = container.get_text(" ", strip=True)
@@ -299,7 +299,13 @@ def parse_skills(soup: BeautifulSoup) -> list[dict]:
         except Exception:
             continue
 
-    return skills
+    seen = set()
+    deduped = []
+    for sk in skills:
+        if sk["name"] not in seen:
+            seen.add(sk["name"])
+            deduped.append(sk)
+    return deduped
 
 
 def parse_attributes_from_detail(soup: BeautifulSoup) -> list[str]:
