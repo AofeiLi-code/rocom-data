@@ -600,11 +600,35 @@ def _menu_batch() -> None:
     raw = input("  模拟场数 N（默认 100）：").strip()
     n = int(raw) if raw.isdigit() and int(raw) > 0 else 100
 
-    run_batch(
-        lambda: build_team(name_a),
-        lambda: build_team(name_b),
-        name_a, name_b, n,
-    )
+    # 选择模拟模式
+    print(f"\n  选择模拟模式：")
+    print(f"  1. 单线程批量模拟（兼容旧版）")
+    print(f"  2. 并发批量模拟+经验合并（推荐，更快）")
+    mode = input("  选择 [1-2]（默认 2）：").strip()
+    
+    if mode == "1":
+        # 旧版单线程模式
+        run_batch(
+            lambda: build_team(name_a),
+            lambda: build_team(name_b),
+            name_a, name_b, n,
+        )
+    else:
+        # 并发模拟模式
+        import multiprocessing as mp
+        workers = input("  工作进程数（默认 CPU核心数）：").strip()
+        if not workers.isdigit() or int(workers) < 1:
+            workers = mp.cpu_count()
+        else:
+            workers = min(int(workers), n)
+        
+        from sim.batch_concurrent import run_concurrent_batch_with_experience
+        run_concurrent_batch_with_experience(
+            team_a_name=name_a,
+            team_b_name=name_b,
+            n=n,
+            workers=workers,
+        )
 
 
 # ============================================================
@@ -799,7 +823,7 @@ def main() -> None:
         print("  1. 开始对战        （从列表选两支队伍）")
         print("  2. 新建队伍        （交互组队并保存）")
         print("  3. 管理队伍        （查看 / 删除 / 重命名）")
-        print("  4. 批量模拟        （选两支队伍跑 N 场）")
+        print("  4. 批量模拟        （选两支队伍跑 N 场，支持并发加速）")
         print("  5. 从图片导入队伍  （识别标准组队分享图）")
         print("  0. 返回")
         print(SEP)
