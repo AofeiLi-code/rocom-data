@@ -27,6 +27,7 @@ from sim.team_roster import (
     list_teams, build_team, add_team, delete_team, rename_team, get_team_def
 )
 from sim.mcts_agent import MCTSAgent
+from sim.human_agent import HumanAgent
 
 # MCTS 每回合迭代次数（可调整：20 快速 / 100 标准 / 200 强力）
 _MCTS_ITERS_BATTLE = 100   # 单局对战
@@ -58,12 +59,17 @@ def _status_flags(p: Pokemon) -> str:
     return " ".join(parts)
 
 
+def _ability_tag(p: Pokemon) -> str:
+    """精灵特性标签，无特性则返回空串"""
+    return f"  [{p.ability}]" if p.ability else ""
+
+
 def _print_field(state: BattleState, label_a: str, label_b: str) -> None:
     pa, pb = state.get_current("a"), state.get_current("b")
     weather_str = f"  天气:{state.weather.value}" if state.weather.value != "none" else ""
     print(f"\n{LINE}  回合 {state.turn}{weather_str}")
-    print(f"  {label_a}: {pa.name:<10} {_hp_bar(pa.current_hp, pa.hp)}  能量:{pa.energy:2}  {_status_flags(pa)}")
-    print(f"  {label_b}: {pb.name:<10} {_hp_bar(pb.current_hp, pb.hp)}  能量:{pb.energy:2}  {_status_flags(pb)}")
+    print(f"  {label_a}: {pa.name:<10}{_ability_tag(pa)} {_hp_bar(pa.current_hp, pa.hp)}  能量:{pa.energy:2}  {_status_flags(pa)}")
+    print(f"  {label_b}: {pb.name:<10}{_ability_tag(pb)} {_hp_bar(pb.current_hp, pb.hp)}  能量:{pb.energy:2}  {_status_flags(pb)}")
 
 
 def _print_team_summary(label: str, team: List[Pokemon]) -> None:
@@ -102,7 +108,7 @@ def _pick_team(prompt: str = "选择队伍序号") -> Optional[str]:
 
 
 # ============================================================
-# 核心：单场对战
+# 核心：单场对战 — 接受任意 AgentProtocol 组合
 # ============================================================
 def run_battle(
     team_a: List[Pokemon],
@@ -110,33 +116,58 @@ def run_battle(
     label_a: str = "A队",
     label_b: str = "B队",
     verbose: bool = True,
+    agent_a=None,   # AgentProtocol 实例；None=自动创建 MCTSAgent
+    agent_b=None,   # AgentProtocol 实例；None=自动创建 MCTSAgent
 ) -> Optional[str]:
     """
-    运行一场对战（随机 AI），verbose=True 时实时打印日志。
-    返回胜者 "a" / "b" 或 None（平局/超时）。
-    """
-    state = BattleState(team_a=team_a, team_b=team_b)
-    engine = BattleEngine(state, verbose=verbose)
+    运行一场对战，支持任意智能体组合。
 
-    if verbose:
+    Parameters
+    ----------
+    agent_a / agent_b : AgentProtocol — 自定义智能体（MCTS/Human/LLM）
+                        None 时自动创建 MCTSAgent
+
+    Returns
+    -------
+    "a" / "b" / None（平局/超时）
+    """
+    from sim.agent_base import AgentProtocol
+
+    state = BattleState(team_a=team_a, team_b=team_b)
+    engine = BattleEngine(state, verbose=True)   # 引擎日志始终打开
+    engine.label_a = label_a
+    engine.label_b = label_b
+
+    if agent_a is None:
+        agent_a = MCTSAgent("a", label_a, iterations=_MCTS_ITERS_BATTLE)
+    if agent_b is None:
+        agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATTLE)
+
+    history = []
+
+    # 判断是否有人类玩家（人类参与时引擎日志关闭，由 HumanAgent 打印）
+    has_human = (
+        isinstance(agent_a, AgentProtocol) and getattr(agent_a, 'show_team_status', False)
+        or isinstance(agent_b, AgentProtocol) and getattr(agent_b, 'show_team_status', False)
+    )
+
+    if verbose and not has_human:
         print(f"\n{SEP}")
-        print(f"  {label_a}  VS  {label_b}")
+        ab_a = f" [{team_a[0].ability}]" if team_a[0].ability else ""
+        ab_b = f" [{team_b[0].ability}]" if team_b[0].ability else ""
+        print(f"  {label_a}({agent_a.__class__.__name__})  VS  {label_b}({agent_b.__class__.__name__})")
         skills_a = [s.name for s in team_a[0].skills]
         skills_b = [s.name for s in team_b[0].skills]
-        print(f"  先锋: {team_a[0].name}[{', '.join(skills_a)}]")
-        print(f"        vs  {team_b[0].name}[{', '.join(skills_b)}]")
+        print(f"  先锋: {team_a[0].name}{ab_a}[{', '.join(skills_a)}]")
+        print(f"        vs  {team_b[0].name}{ab_b}[{', '.join(skills_b)}]")
         print(SEP)
-
-    agent_a = MCTSAgent("a", label_a, iterations=_MCTS_ITERS_BATTLE)
-    agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATTLE)
-    history = []
 
     winner = None
     for _ in range(BattleEngine.MAX_TURNS):
         winner = engine.check_winner()
         if winner:
             break
-        if verbose:
+        if verbose and not has_human:
             _print_field(state, label_a, label_b)
         snap     = state.deep_copy()
         action_a = agent_a.choose_action(engine)
@@ -147,11 +178,9 @@ def run_battle(
     if not winner:
         winner = engine.check_winner()
 
-    # 记录经验并保存
-    agent_a.experience_db.record_game(history, winner)
-    agent_b.experience_db.record_game(history, winner)
-    agent_a.save()
-    agent_b.save()
+    # 记录经验 — 通过统一协议调用
+    agent_a.on_game_end(history, winner)
+    agent_b.on_game_end(history, winner)
 
     if verbose:
         tag = f"{label_a} 赢！" if winner == "a" else (f"{label_b} 赢！" if winner == "b" else "平局/超时")
@@ -232,7 +261,16 @@ def run_batch(
 # ============================================================
 def _menu_battle() -> None:
     print(f"\n{SEP}")
-    print("  开始对战 — 选择 A 队")
+    print("  选择对战模式")
+    print(f"  1. AI vs AI（MCTS自战）")
+    print(f"  2. 人 vs AI（你控制A队）")
+    print(f"  3. 人对人（你选A队，对方键盘输入B队）")
+    print(f"  4. LLM vs AI（大模型对战MCTS）")
+    print(f"  5. LLM vs 人类（大模型对战你）")
+    raw = input("  选择 [1-5]（默认 2）：").strip()
+    mode = int(raw) if raw.isdigit() and 1 <= int(raw) <= 5 else 2
+
+    print(f"\n  开始对战 — 选择 A 队")
     name_a = _pick_team("A 队序号")
     if name_a is None:
         return
@@ -245,7 +283,48 @@ def _menu_battle() -> None:
 
     team_a = build_team(name_a)
     team_b = build_team(name_b)
-    run_battle(team_a, team_b, name_a, name_b, verbose=True)
+
+    # ── 根据模式创建 Agent ───────────────────────
+    from sim.human_agent import HumanAgent
+
+    agent_a = None
+    agent_b = None
+
+    if mode == 1:
+        # AI vs AI — 默认行为，不传 agent
+        pass
+    elif mode == 2:
+        # 人 vs AI
+        agent_a = HumanAgent("a", name_a)
+    elif mode == 3:
+        # 人对人
+        agent_a = HumanAgent("a", name_a)
+        agent_b = HumanAgent("b", name_b)
+    elif mode == 4:
+        # LLM vs AI
+        try:
+            from sim.llm_agent import LLMAgent
+            agent_a = LLMAgent("a", name_a)
+        except EnvironmentError as e:
+            print(f"\n  [!] {e}")
+            return
+    elif mode == 5:
+        # LLM vs 人类
+        try:
+            from sim.llm_agent import LLMAgent
+            agent_a = LLMAgent("a", name_a)
+        except EnvironmentError as e:
+            print(f"\n  [!] {e}")
+            return
+        agent_b = HumanAgent("b", name_b)
+
+    run_battle(
+        team_a, team_b,
+        label_a=name_a, label_b=name_b,
+        verbose=True,
+        agent_a=agent_a,
+        agent_b=agent_b,
+    )
 
 
 # ============================================================
@@ -802,6 +881,131 @@ def _menu_import_image() -> None:
 
 
 # ============================================================
+# 菜单：6. LLM 辅助
+# ============================================================
+def _menu_llm_assist() -> None:
+    """LLM 辅助功能 — 队伍生成、策略生成等。"""
+    print(f"\n{SEP}")
+    print("  LLM 辅助")
+    print(SEP)
+    print("  1. AI 组队（大模型根据精灵库和已有经验设计新阵容）")
+    print("  2. 生成策略文件（为现有队伍创建 MCTS 策略配置）")
+    print("  3. 查看历史经验（查看 LLM 对战后的经验文档）")
+    print(SEP)
+
+    try:
+        choice = input("  选择 [1-3]（0 取消）：").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if choice == "0" or not choice:
+        return
+
+    # ── AI 组队 ───────────────────────
+    if choice == "1":
+        from sim.llm_team_generator import generate_team_with_llm, save_generated_team
+
+        theme = input("  请输入队伍主题/风格（留空则自由发挥）：").strip()
+        print(f"\n  正在调用大模型设计阵容...")
+        result = generate_team_with_llm(theme if theme else None)
+        if result is None:
+            print("  [!] LLM 生成失败")
+            return
+
+        print(f"\n{SEP}")
+        print(f"  AI 设计结果：队伍「{result['team_name']}」")
+        theme_note = result.get("theme", "")
+        if theme_note:
+            print(f"  风格: {theme_note}")
+        strategy_notes = result.get("strategy_notes", "")
+        if strategy_notes:
+            print(f"  战术说明: {strategy_notes}")
+        for i, m in enumerate(result["members"], 1):
+            skills_str = ", ".join(s for s in m.get("skills", []) if s)
+            print(f"    {i}. {m['pokemon']:<12} 技能：{skills_str}")
+
+        confirm = input("\n  保存到队伍列表？(Y/n)：").strip().lower()
+        if confirm != "n":
+            save_generated_team(result)
+
+    # ── 生成策略文件 ───────────────────────
+    elif choice == "2":
+        from sim.llm_team_generator import generate_strategy_with_llm, save_generated_strategy
+
+        _print_roster("队伍列表")
+        teams = list_teams()
+        print(f"\n  选择队伍（0 取消）：", end="")
+        raw = input().strip()
+        if raw == "0" or not raw:
+            return
+        if not raw.isdigit() or not (1 <= int(raw) <= len(teams)):
+            print("  [!] 无效序号")
+            return
+
+        team_name = teams[int(raw) - 1]["name"]
+        print(f"\n  正在为「{team_name}」生成策略文件...")
+        strategy = generate_strategy_with_llm(team_name)
+        if strategy is None:
+            print("  [!] LLM 生成策略失败")
+            return
+
+        # 显示生成的策略
+        print(f"\n{SEP}")
+        print(f"  策略配置：")
+        for key, val in strategy.items():
+            if isinstance(val, list):
+                print(f"    {key}: {', '.join(str(v) for v in val)}")
+            elif isinstance(val, dict):
+                print(f"    {key}:")
+                for k2, v2 in val.items():
+                    print(f"      {k2}: {v2}")
+            else:
+                print(f"    {key}: {val}")
+
+        confirm = input("\n  保存策略文件？(Y/n)：").strip().lower()
+        if confirm != "n":
+            save_generated_strategy(team_name, strategy)
+
+    # ── 查看历史经验 ───────────────────────
+    elif choice == "3":
+        from sim.llm_agent import _load_experience
+        import json as _json
+
+        _print_roster("队伍列表")
+        teams = list_teams()
+        print(f"\n  选择队伍（0 取消）：", end="")
+        raw = input().strip()
+        if raw == "0" or not raw:
+            return
+        if not raw.isdigit() or not (1 <= int(raw) <= len(teams)):
+            print("  [!] 无效序号")
+            return
+
+        team_name = teams[int(raw) - 1]["name"]
+        experiences = _load_experience(team_name)
+        if not experiences:
+            print(f"\n  「{team_name}」暂无历史经验文档")
+            return
+
+        print(f"\n{SEP}")
+        print(f"  {team_name} — 历史对战经验（共 {len(experiences)} 条）：")
+        for i, exp in enumerate(reversed(experiences), 1):
+            result = exp.get("result", "未知")
+            summary = exp.get("summary", "")[:200]
+            timestamp = exp.get("timestamp", "")
+            lessons = exp.get("lessons", [])
+            print(f"\n  [{i}] {timestamp}")
+            print(f"    结果: {result} | 回合数: {exp.get('turns', '?')}")
+            if summary:
+                print(f"    总结: {summary}")
+            for lesson in (lessons if isinstance(lessons, list) else [str(lessons)]):
+                print(f"    教训: {lesson[:200]}")
+
+    else:
+        print("  无效选择")
+
+
+# ============================================================
 # 主菜单
 # ============================================================
 def main() -> None:
@@ -820,16 +1024,17 @@ def main() -> None:
             tag = "[预设]" if t.get("preset") else "[自定]"
             print(f"    {i:2}. {tag} {t['name']}")
         print(SEP)
-        print("  1. 开始对战        （从列表选两支队伍）")
+        print("  1. 开始对战        （选择模式：AI/AI、人/AI、人对人、LLM/AI等）")
         print("  2. 新建队伍        （交互组队并保存）")
         print("  3. 管理队伍        （查看 / 删除 / 重命名）")
         print("  4. 批量模拟        （选两支队伍跑 N 场，支持并发加速）")
         print("  5. 从图片导入队伍  （识别标准组队分享图）")
+        print("  6. LLM 辅助        （AI组队、生成策略、查看经验文档）")
         print("  0. 返回")
         print(SEP)
 
         try:
-            choice = input("  选择 [0-5]: ").strip()
+            choice = input("  选择 [0-6]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n  再见！")
             break
@@ -846,8 +1051,10 @@ def main() -> None:
             _menu_batch()
         elif choice == "5":
             _menu_import_image()
+        elif choice == "6":
+            _menu_llm_assist()
         else:
-            print("  无效选择，请输入 0-5")
+            print("  无效选择，请输入 0-6")
             continue
 
         try:

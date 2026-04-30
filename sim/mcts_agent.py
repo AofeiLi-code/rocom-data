@@ -18,6 +18,7 @@ from sim.battle_engine import BattleEngine, Action
 from sim.mcts import MCTSSearch
 from sim.experience_db import ExperienceDB
 from sim.strategy import load_strategy, get_starter_idx
+from sim.agent_base import AgentProtocol, GameHistory
 
 
 # ============================================================
@@ -36,6 +37,8 @@ class MCTSAgent:
     time_limit   : 每回合最大思考时间（秒）；None = 只看 iterations
     load_exp     : 是否自动从磁盘加载历史经验
     """
+
+    show_team_status: bool = False
 
     def __init__(
         self,
@@ -73,6 +76,15 @@ class MCTSAgent:
     def choose_action(self, engine: BattleEngine) -> Action:
         """根据当前引擎状态，用 MCTS 选择最优动作。"""
         return self._search.search(engine.state)
+
+    # ------------------------------------------------------------------
+    # 局后处理 — 记录经验并保存
+    # ------------------------------------------------------------------
+
+    def on_game_end(self, history: GameHistory, winner: Optional[str]) -> None:
+        """记录本局经验到 ExperienceDB 并持久化。"""
+        self.experience_db.record_game(history, winner)
+        self.save()
 
     # ------------------------------------------------------------------
     # 保存经验
