@@ -5,6 +5,9 @@
 data/*.backup.json
 data/*.backup.csv
 data/failed_urls.txt
+data/scrape_log.txt
+data/images/
+data/*.html
 
 __pycache__/
 .DS_Store

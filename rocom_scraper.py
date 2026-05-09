@@ -33,6 +33,7 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://wiki.biligame.com"
 LIST_URL = "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4"
+AVATAR_LIST_URL = "https://wiki.biligame.com/rocom/%E4%B8%8A%E4%BC%A0%E9%98%B5%E5%AE%B9"
 
 HEADERS = {
     "User-Agent": (
@@ -61,6 +62,7 @@ IMAGE_DIRS = {
     "skill":     "images/skills",     # 技能图标
     "ability":   "images/abilities",  # 特性图标
     "matchup":   "images/matchup",    # 克制表属性图标
+    "avatar":    "images/avatars",    # 上传阵容头像
 }
 
 _urls_cache: dict[str, dict] = {}   # url -> row, 去重用
@@ -169,7 +171,127 @@ def img_alt_to_attr(alt: str) -> str:
     return m.group(1) if m else alt.strip()
 
 
+def fetch_text(url: str, retries: int = 3) -> str:
+    """Fetch a page and return response text with the same retry behavior as fetch()."""
+    retry_waits = [10, 20, 30]
+
+    for attempt in range(retries):
+        try:
+            resp = SESSION.get(url, timeout=15)
+            if resp.status_code == 567:
+                wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+                print(f"\n  [!] 触发反爬限制 (567)，等待 {wait}s 后重试"
+                      f"({attempt+1}/{retries})...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.text
+        except requests.HTTPError as e:
+            wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+            print(f"\n  [!] HTTP 错误 ({attempt+1}/{retries}): {e}，等待 {wait}s...")
+            time.sleep(wait)
+        except requests.RequestException as e:
+            wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+            print(f"\n  [!] 请求失败 ({attempt+1}/{retries}): {e}，等待 {wait}s...")
+            time.sleep(wait)
+
+    raise RuntimeError(f"无法抓取（已重试 {retries} 次）: {url}")
+
+
+def extract_avatar_name(raw: str) -> str:
+    """Extract a sprite name from upload-lineup avatar alt/title text."""
+    text = (raw or "").strip()
+    match = re.fullmatch(r"link=(.+?)\}\}", text)
+    if match:
+        return match.group(1).strip()
+    if text.startswith("link="):
+        text = text[len("link="):]
+    return text.removesuffix("}}").strip()
+
+
+def _to_optional_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def parse_avatar_list_html(html: str) -> list[dict]:
+    """Parse upload-lineup page HTML and return avatar image records."""
+    soup = BeautifulSoup(html, "html.parser")
+    avatars: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for list_node in soup.find_all("div", class_="rocom_spirit_popup_overlay_list"):
+        for box in list_node.find_all("div", class_="rocom_canlearn_img_box"):
+            img = box.find("img")
+            if not img:
+                continue
+            url = (img.get("src") or "").strip()
+            if not url:
+                continue
+            name = extract_avatar_name(img.get("alt") or img.get("title") or "")
+            if not name:
+                continue
+            key = (name, url)
+            if key in seen:
+                continue
+            seen.add(key)
+            avatars.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "primary_type": (box.get("data-main") or "").strip(),
+                    "secondary_type": (box.get("data-2") or "").strip(),
+                    "width": _to_optional_int(img.get("data-file-width")),
+                    "height": _to_optional_int(img.get("data-file-height")),
+                }
+            )
+
+    return avatars
+
+
+def parse_avatar_list_page(url: str = AVATAR_LIST_URL) -> list[dict]:
+    """Fetch and parse the upload-lineup avatar list page."""
+    print(f"[*] 抓取头像列表页: {url}")
+    return parse_avatar_list_html(fetch_text(url))
+
+
 # ── 列表页解析 ────────────────────────────────────────────────────────────────
+
+def download_avatar_images(data_dir: Path, force: bool = False) -> dict:
+    if _urls_path is None:
+        _init_urls(data_dir / "sprites.json")
+
+    avatars = parse_avatar_list_page()
+    if not avatars:
+        raise RuntimeError("avatar list not found")
+
+    stats = {
+        "total": len(avatars),
+        "saved": 0,
+        "failed": 0,
+        "failed_urls": [],
+    }
+
+    total = len(avatars)
+    for index, avatar in enumerate(avatars, 1):
+        print_progress(index, total, avatar["name"])
+        local_path = _add_url(avatar["name"], "avatar", avatar["url"], data_dir, force)
+        if local_path:
+            stats["saved"] += 1
+        else:
+            stats["failed"] += 1
+            stats["failed_urls"].append(avatar["url"])
+
+    print(
+        f"[完成] 头像: 总数 {stats['total']}, "
+        f"保存 {stats['saved']}, 失败 {stats['failed']}"
+    )
+    return stats
+
 
 def parse_list_page() -> list[dict]:
     """解析精灵图鉴列表页, 返回 [{no, name, form, url, has_shiny}, ...]"""
@@ -550,15 +672,13 @@ def parse_sprite_detail(entry: dict, data_dir: Path | None = None, force: bool =
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="洛克王国精灵数据爬虫")
-    parser.add_argument("--limit", type=int, default=0, help="只爬前N只 (0=全部)")
-    parser.add_argument("--delay", type=float, default=1.5,
-                        help="请求间隔下限(秒)，实际为 delay~(delay+1.5) 随机值，默认 1.5")
-    parser.add_argument("--output", default="data/sprites.json", help="输出路径")
-    parser.add_argument("--force", action="store_true", help="强制重爬所有精灵（含图片）")
-    args = parser.parse_args()
+def _write_failed_urls(path: Path, failed_urls: list[str]) -> None:
+    if not failed_urls:
+        return
+    path.write_text("\n".join(failed_urls), encoding="utf-8")
 
+
+def run_sprite_scraper(args) -> int:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     data_dir = out_path.parent
@@ -571,7 +691,6 @@ def main():
                 p.unlink()
         _urls_cache.clear()
 
-    # 加载已有数据，按 (no, name, form) 建索引
     existing: dict[tuple, dict] = {}
     if out_path.exists() and not args.force:
         with open(out_path, encoding="utf-8") as f:
@@ -583,7 +702,8 @@ def main():
     except RuntimeError as e:
         print(f"\n[!] 无法连接 wiki: {e}")
         print("[!] 可能是网络问题或服务器限速，请稍后重试")
-        return
+        return 1
+
     if args.limit > 0:
         entries = entries[:args.limit]
         print(f"[*] 限制模式: 只处理前 {args.limit} 只")
@@ -594,7 +714,8 @@ def main():
 
     for i, entry in enumerate(entries, 1):
         key = (entry["no"], entry["name"], entry.get("form"))
-        name_display = f"{entry['name']}{'（'+entry['form']+'）' if entry['form'] else ''}"
+        form = entry.get("form")
+        name_display = f"{entry['name']}（{form}）" if form else entry["name"]
         print_progress(i, len(entries), f"NO.{entry['no']:03d} {name_display}")
 
         if key in existing:
@@ -619,16 +740,66 @@ def main():
     _save_csv(results, csv_path)
     _save_skills_csv(results, data_dir / "skills.csv")
 
+    avatar_failed = []
+    if not getattr(args, "skip_avatars", False):
+        try:
+            avatar_stats = download_avatar_images(data_dir, args.force)
+            avatar_failed = avatar_stats.get("failed_urls", [])
+        except RuntimeError as exc:
+            print(f"\n[!] 头像同步失败: {exc}")
+
+    all_failed = failed + avatar_failed
+
     print(f"\n[完成] 成功: {len(results)-skipped}, 跳过: {skipped}, 失败: {len(failed)}")
     print(f"[完成] JSON 已保存至: {out_path.resolve()}")
     print(f"[完成] CSV  已保存至: {csv_path.resolve()}")
     print(f"[完成] 技能 已保存至: {(data_dir / 'skills.csv').resolve()}")
     print(f"[完成] URLs 已保存至: {(data_dir / 'urls.csv').resolve()}")
 
-    if failed:
+    if all_failed:
         fail_path = out_path.with_name("failed_urls.txt")
-        fail_path.write_text("\n".join(failed))
+        _write_failed_urls(fail_path, all_failed)
         print(f"[完成] 失败URL已记录至: {fail_path}")
+
+    return 0
+
+
+def run_avatar_scraper(output: Path, force: bool) -> int:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = output.parent
+    _init_urls(output)
+
+    try:
+        stats = download_avatar_images(data_dir, force)
+    except RuntimeError as exc:
+        print(f"\n[!] 头像同步失败: {exc}")
+        return 1
+
+    failed_urls = stats.get("failed_urls", [])
+    if failed_urls:
+        fail_path = output.with_name("failed_urls.txt")
+        _write_failed_urls(fail_path, failed_urls)
+        print(f"[完成] 失败URL已记录至: {fail_path}")
+
+    print(f"[完成] URLs 已保存至: {(data_dir / 'urls.csv').resolve()}")
+    return 1 if failed_urls else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="洛克王国精灵数据爬虫")
+    parser.add_argument("--limit", type=int, default=0, help="只爬前N只 (0=全部)")
+    parser.add_argument("--delay", type=float, default=1.5,
+                        help="请求间隔下限(秒)，实际为 delay~(delay+1.5) 随机值，默认 1.5")
+    parser.add_argument("--output", default="data/sprites.json", help="输出路径")
+    parser.add_argument("--force", action="store_true", help="强制重爬当前运行范围内的数据和图片")
+    parser.add_argument("--skip-avatars", action="store_true", help="跳过上传阵容头像同步")
+    parser.add_argument("--avatars-only", action="store_true", help="只同步上传阵容页精灵头像")
+    args = parser.parse_args()
+
+    out_path = Path(args.output)
+    if args.avatars_only:
+        raise SystemExit(run_avatar_scraper(out_path, args.force))
+    raise SystemExit(run_sprite_scraper(args))
 
 
 def _backfill_evolution_ids(results: list):
