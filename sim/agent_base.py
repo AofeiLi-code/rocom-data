@@ -5,13 +5,14 @@ Agent Protocol — 所有战斗智能体的统一接口
 以及 show_team_status 标记（用于区分人类玩家和 AI）。
 """
 
-from typing import List, Optional, Tuple, Protocol
+from typing import List, Optional, Tuple, Protocol, runtime_checkable
 
 # Action = (技能索引,) | (-1,)汇合聚能 | (-2, 精灵索引)换人
 Action = Tuple[int, ...]
 GameHistory = List[Tuple]   # (BattleState深拷贝, Action_a, Action_b)
 
 
+@runtime_checkable
 class AgentProtocol(Protocol):
     """
     战斗智能体协议。

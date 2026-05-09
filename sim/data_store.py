@@ -32,7 +32,7 @@ def _load_env(path: str = None) -> dict:
     env_path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
     if not os.path.exists(env_path):
         return config
-    with open(env_path, "r") as f:
+    with open(env_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -226,8 +226,11 @@ def migrate_experience_from_json(config: dict) -> bool:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            # 解析经验数据：{team: {state_key: {action_key: {"w": wins, "n": total}}}}
-            for team, states in data.items():
+            # 解析经验数据：兼容 ExperienceDB 序列化格式
+            #   旧/简化: {"a": {...}, "b": {...}}
+            #   新/标准: {"total_games": N, "db": {"a": {...}, "b": {...}}}
+            exp_root = data.get("db", data) if isinstance(data.get("db"), dict) else data
+            for team, states in exp_root.items():
                 if not isinstance(states, dict):
                     continue
                 if team not in ("a", "b"):
