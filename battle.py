@@ -1044,10 +1044,11 @@ def _menu_llm_assist() -> None:
     print("  1. AI 组队（大模型根据精灵库和已有经验设计新阵容）")
     print("  2. 生成策略文件（为现有队伍创建 MCTS 策略配置）")
     print("  3. 查看历史经验（查看 LLM 对战后的经验文档）")
+    print("  4. 战斗复盘（聚合最近 N 场，分析胜率原因 / 改阵建议）")
     print(SEP)
 
     try:
-        choice = input("  选择 [1-3]（0 取消）：").strip()
+        choice = input("  选择 [1-4]（0 取消）：").strip()
     except (EOFError, KeyboardInterrupt):
         return
 
@@ -1154,8 +1155,71 @@ def _menu_llm_assist() -> None:
             for lesson in (lessons if isinstance(lessons, list) else [str(lessons)]):
                 print(f"    教训: {lesson[:200]}")
 
+    # ── 战斗复盘 ───────────────────────
+    elif choice == "4":
+        _menu_llm_review_aggregate()
+
     else:
         print("  无效选择")
+
+
+def _menu_llm_review_aggregate() -> None:
+    """LLM 战斗复盘 — 聚合最近 N 场（≤100），分析胜率与改阵建议。"""
+    from sim.llm_review import analyze_team_aggregate, MAX_BATCHES
+
+    _print_roster("队伍列表")
+    teams = list_teams()
+    print(f"\n  选择要复盘的队伍（0 取消）：", end="")
+    raw = input().strip()
+    if raw == "0" or not raw:
+        return
+    if not raw.isdigit() or not (1 <= int(raw) <= len(teams)):
+        print("  [!] 无效序号")
+        return
+    team_name = teams[int(raw) - 1]["name"]
+
+    print(f"\n  分析最近多少场？(1-{MAX_BATCHES}，默认 50)：", end="")
+    n_raw = input().strip()
+    n = int(n_raw) if n_raw.isdigit() and 1 <= int(n_raw) <= MAX_BATCHES else 50
+
+    print(f"\n  指定对手筛选？（直接回车=全部对手；输入对手队伍名筛选）：", end="")
+    opp = input().strip() or None
+
+    print(f"\n  正在聚合「{team_name}」最近 {n} 场" +
+          (f"（对 {opp}）" if opp else "") + " 并调用 LLM 分析，请稍候...")
+    result = analyze_team_aggregate(team_name, n=n, opponent=opp)
+
+    if not result["ok"]:
+        # 即便 LLM 失败，stats 可能仍可显示
+        print(f"\n  [!] {result['message']}")
+        if result.get("stats"):
+            _print_aggregate_stats(team_name, result["stats"], result["battles_used"])
+        return
+
+    _print_aggregate_stats(team_name, result["stats"], result["battles_used"])
+    print("\n" + SEP)
+    print(f"  LLM 复盘分析  ·  {team_name}  ·  最近 {result['battles_used']} 场")
+    print(SEP)
+    print(result["analysis"])
+    print(SEP)
+
+
+def _print_aggregate_stats(team_name: str, stats: dict, used: int) -> None:
+    """显示聚合统计（不依赖 LLM）。"""
+    print(f"\n  [{team_name}] 最近 {used} 场聚合统计")
+    print(f"  战绩: {stats['wins']}胜 / {stats['losses']}败 / {stats['draws']}平   "
+          f"胜率 {stats['win_rate']*100:.1f}%   平均回合 {stats['avg_turns']:.1f}")
+    if stats["by_opponent"]:
+        print(f"  对手分布:")
+        items = sorted(stats["by_opponent"].items(),
+                       key=lambda kv: -kv[1]["total"])[:8]
+        for opp, s in items:
+            wr = (s["win"] / s["total"] * 100) if s["total"] else 0
+            print(f"    - {opp:<14} {s['total']:>3}场  "
+                  f"{s['win']}胜/{s['loss']}败/{s['draw']}平  胜率{wr:>4.0f}%")
+    if stats.get("loss_fainted_freq"):
+        items = sorted(stats["loss_fainted_freq"].items(), key=lambda x: -x[1])[:6]
+        print(f"  败局阵亡: " + ", ".join(f"{k}×{v}" for k, v in items))
 
 
 # ============================================================

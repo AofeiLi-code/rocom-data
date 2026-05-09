@@ -5,13 +5,13 @@ chcp 65001 >nul
 cls
 echo.
 echo  ============================================
-echo    Rocom Helper  v1.2
+echo    Rocom Helper  v1.3
 echo  ============================================
 echo    1. Scrape sprites              (rocom wiki)
 echo    2. Check for sprite updates
 echo    3. Scrape BWIKI lineups        (player teams)
 echo    4. Browse sprites              (viewer)
-echo    5. Battle simulator            (teams / import / PVP / LLM)
+echo    5. Battle simulator            (teams / import / PVP / LLM review)
 echo    6. Train MCTS                  (self-play loop)
 echo    7. Manage experience DB
 echo    0. Exit
