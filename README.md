@@ -680,3 +680,18 @@ rocom-data/
 战斗引擎（`sim/` 目录）基于 [NRC_SIM](https://github.com/AofeiLi-code/NRC_SIM)，遵循 MIT License。
 
 闪耀大赛自动挑战功能（`pvp/` 目录）基于[roco-kingdom-world-sript](https://github.com/JhonTitor6/roco-kingdom-world-script.git)， 遵循 MIT License.
+
+### 社区贡献者                                                                                                                                                                                                     
+                                                            
+特别感谢以下贡献者提交的 PR，他们的工作是 v1.x 多个核心功能能够落地的基础：                                                                                                                                        
+   
+| 贡献者 | PR | 内容 |                                                                                                                                                                                             
+|--------|----|------|                                    
+| [@bupt-lxc](https://github.com/bupt-lxc) | [#1](https://github.com/AofeiLi-code/rocom-data/pull/1) | 进化链爬取（`evolution_chain` 字段） |
+| [@bupt-lxc](https://github.com/bupt-lxc) | [#4](https://github.com/AofeiLi-code/rocom-data/pull/4) | 技能等级数据、特性图片爬取、`skills.csv` / `urls.csv`、`--force` 全量重爬 |                                 
+| [@cy6909](https://github.com/cy6909) | [#5](https://github.com/AofeiLi-code/rocom-data/pull/5) | 互动对战（人机对战）、AI 辅助优化、**MariaDB 可配置数据存储层**（v1.3 数据库后端的基石） |                      
+| [@bupt-lxc](https://github.com/bupt-lxc) | [#6](https://github.com/AofeiLi-code/rocom-data/pull/6) | BWIKI 玩家配队抓取、精灵头像爬取（战斗模拟器导入功能的数据来源） |                                          
+                                                                                                                                                                                                                     
+如果你希望加入贡献者名单，欢迎通过 PR / Issue 参与！                                                                                                                                                               
+                                                                                                                                                                                                                     
+  --- 
