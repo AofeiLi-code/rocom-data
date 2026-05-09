@@ -18,3 +18,7 @@ logs/
 
 # Python packaging 构建产物
 *.egg-info/
+
+# 本地配置（含密码 / API key，请勿提交；模板见对应 .example 文件）
+.env
+data/llm_config.yaml
