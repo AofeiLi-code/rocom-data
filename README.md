@@ -678,3 +678,5 @@ rocom-data/
 本项目由 [AofeiLi-code](https://github.com/AofeiLi-code) 负责整体架构设计与需求规划，具体代码实现由 [Claude](https://claude.ai)（Anthropic）协助完成。
 
 战斗引擎（`sim/` 目录）基于 [NRC_SIM](https://github.com/AofeiLi-code/NRC_SIM)，遵循 MIT License。
+
+闪耀大赛自动挑战就与[roco-kingdom-world-sript](https://github.com/JhonTitor6/roco-kingdom-world-script.git)， 遵循MIT License.
