@@ -5,22 +5,27 @@
 
 Hook 接入点（由 battle_engine.py 调用）：
   on_battle_start      — 设置初始出战精灵的入场回合
-  on_switch_in         — 换入时效果（下黑手 / 降灵印记 / 棘刺印记）
+  on_turn_start        — 回合开始（预警 / 哨兵：预测敌方威胁，赋予临时速度）
+  on_switch_in         — 换入时效果（下黑手 / 降灵印记 / 棘刺印记 / 慢热型加能量）
   on_switch_out        — 换出时效果（洁癖传递 buff/debuff）
-  on_faint             — 倒下时效果（诈死 / 飓风 / 虚假宝箱）
-  get_priority_bonus   — 迅捷特性（飓风 / 翼轴 / 暴食）
+  on_faint             — 倒下时效果（诈死 / 飓风 / 虚假宝箱 / 不朽）
+  get_priority_bonus   — 迅捷特性（飓风 / 翼轴 / 暴食 / 野性感官）
   get_attack_mods      — 攻击修正（威力加成/倍率/印记加成/先手判断）
   get_defense_mods     — 防御修正（绝对秩序减伤）
-  on_post_attack       — 攻击后效果（溶解扩散 / 扩散侵蚀 / 渗透 / 龙噬印记 / 星陨印记）
-  on_use_defense_skill — 使用防御技能时（身经百练计数）
+  on_post_attack       — 攻击后效果（溶解扩散 / 渗透 / 助燃 / 灵魂灼伤 / 浸润 / 氧循环 / 龙噬印记 / 星陨印记 / 捉迷藏冻结标记）
+  on_use_status_skill  — 状态技能使用后（泛音列）
+  on_use_defense_skill — 使用防御技能时（身经百练计数 / 野性感官 / 慢热型计数）
   intercept_burn_decay — 燃薪虫：烧伤增长而非衰减
   get_extra_hit_count  — 嫁祸：HP 里程碑触发额外连击
   on_defender_damaged  — 嫁祸：HP 里程碑检测
   apply_mark_damage    — 印记回合伤害（中毒印记）
-  on_turn_end          — 回合结束效果（蚀刻 / 特殊清洁场景 / 光合印记 / 印记伤害）
-  on_turn_end_switches — 回合结束换人（星地善良）
-  get_mark_energy_cost_mod — 印记能耗修正（湿润 / 蓄势）
+  on_turn_end          — 回合结束效果（蚀刻 / 特殊清洁场景 / 光合印记 / 吸积盘 / 不朽 / 印记伤害 / 泛音列倒计时 / 捉迷藏维护）
+  on_turn_end_switches — 回合结束换人（星地善良 / 哨兵脱离）
+  get_mark_energy_cost_mod — 印记能耗修正（湿润 / 蓄势 / 对流取反）
   get_mark_speed_penalty   — 印记速度惩罚（减速）
+  on_freeze_applied    — 捉迷藏：标记冻结来源
+  is_falling_star_active — 陨落：跳过回合结束伤害效果
+  get_temp_speed_bonus — 预警/哨兵：临时速度加成
 
 已实现特性（24个）：
   ── 毒队 ──────────────────────────────────────────────────────────────────
@@ -52,6 +57,29 @@ Hook 接入点（由 battle_engine.py 调用）：
   嫁祸      朔夜伊芙   HP 穿越 75%/50%/25% 里程碑时，技能连击次数各 +2
   特殊清洁场景 食尘短绒 回合结束偷取敌方 1 层印记（优先正面）转移至己方
   星地善良  小皮球     回合结束时，若当前己方精灵能量归 0，自动换入
+
+  ── BWIKI 玩家配队补充（Top 18 缺失中已实现）────────────────────────────
+  冰钻      冰钻布鲁斯 敌方所有技能 base_cost 总和 ×10% → 攻击威力加成
+  助燃      火神等     使用火系技能后，自身双攻 +20%（永久叠加）
+  灵魂灼伤  九尾狐等   冰系技能命中 → 4 层灼烧；火系技能命中 → 2 层冻结
+  氧循环    魔力猫等   使用草系技能后，回复 10% 最大 HP
+  吸积盘    怖哭菇等   回合结束敌方获得 2 层星陨印记
+  野性感官  针叶巡林等 应对成功后，下次自己攻击 priority +1（一次性）
+  浸润      水蓝蓝等   使用水系技能后，全技能能耗 -1（永久叠加，可至 0）
+  月牙雪糕  月牙雪熊   使用攻击技能时，星陨印记反击额外加上敌方冻结层数
+  不朽      大头骨龙等 力竭后 3 回合复活（满血满能量，不补 lives，不强制上场）
+
+  ── BWIKI C 组（需新 hook + 助手）──────────────────────────────────────
+  对流      利灯鱼     自身印记能耗修正取反（+变-，-变+）
+  石头大餐  阿米亚特   能量不足时，每缺 1 点消耗 5% maxHP 代替（HP 可到 0）
+  慢热型    瞌睡王     初始能量 0；不在场时己方应对累计计数（cap 2），
+                       入场时加 5×counter 能量并清零计数
+  捉迷藏    大耳帽兜   己方造成的冻结期间，敌方全技能能耗 +1
+  陨落      落陨星兔   在场时跳过双方回合结束的伤害类效果
+                       （烧伤伤害/中毒伤害/印记伤害；不跳特性触发与冻毙）
+  泛音列    号儿鱼     使用状态技能后，敌方 3 回合内全技能能耗 +3（再触发刷新）
+  预警      黑猫巫师   回合开始时若敌方任一技能能击败自己，本回合速度 +50
+  哨兵      优优       同预警，且行动后强制脱离（最后一只时不脱离）
 """
 
 from dataclasses import dataclass, field
@@ -151,6 +179,18 @@ class AbilityHooks:
                     f"  [棘刺印记×{neg_mark.stacks}] {new_p.name} 入场失去 {dmg} HP"
                 )
 
+        # 瞌睡王 [慢热型]：入场时获得 5×累计应对计数 的能量，并清零计数
+        if _get_ability_name(new_p) == "慢热型":
+            counter_key = f"slow_heat_{team}"
+            cnt = state.ability_counters.get(counter_key, 0)
+            if cnt > 0:
+                gain = 5 * cnt
+                new_p.gain_energy(gain)
+                state.ability_counters[counter_key] = 0
+                engine._log(
+                    f"  [{new_p.name}的慢热型] 入场积累 {cnt} 次应对 → 能量 +{gain}"
+                )
+
     # ------------------------------------------------------------------
     # 换出
     # ------------------------------------------------------------------
@@ -232,6 +272,13 @@ class AbilityHooks:
                     f"  [{fainted_p.name}的虚假宝箱] {enemy.name} 攻防 +20%"
                 )
 
+        # 大头骨龙等 [不朽]：力竭后 3 回合复活（满血满能量；不补 lives，不强制上场）
+        elif ability == "不朽":
+            fainted_p.revive_timer = 3
+            engine._log(
+                f"  [{fainted_p.name}的不朽] 力竭进入复活倒计时（3 回合后复活）"
+            )
+
     # ------------------------------------------------------------------
     # 先手加成
     # ------------------------------------------------------------------
@@ -270,6 +317,10 @@ class AbilityHooks:
         # 翼龙 [暴食]：龙系技能获得先手
         if ability == "暴食" and skill.skill_type == Type.DRAGON:
             return 999.0
+
+        # 针叶巡林等 [野性感官]：应对成功后下次攻击 priority +1（一次性，由 on_post_attack 清除 flag）
+        if ability == "野性感官" and current.feral_senses_priority:
+            return 1.0
 
         return 0.0
 
@@ -364,6 +415,12 @@ class AbilityHooks:
         if ability == "魔法增效":
             if skill.category == SkillCategory.MAGICAL:
                 ctx.power_mult *= 1.7
+
+        # ---- 冰钻布鲁斯 [冰钻]：敌方技能总能耗每 1 点 → 攻击威力 +10% ----
+        if ability == "冰钻":
+            total_cost = sum(s.energy_cost for s in defender.skills)
+            if total_cost > 0:
+                ctx.power_mult *= (1.0 + 0.1 * total_cost)
 
         # ---- 正面印记修正（攻击技能才计算威力加成）----
         if skill.power > 0:
@@ -475,6 +532,39 @@ class AbilityHooks:
 
         # 海豹船长 [身经百练] 的计数由 on_use_defense_skill 处理
 
+        # 火神等 [助燃]：使用火系技能后，自身双攻 +20%（永久叠加）
+        if ability == "助燃" and skill.skill_type == Type.FIRE:
+            attacker.atk_boost   += 0.2
+            attacker.spatk_boost += 0.2
+            engine._log(f"  [{attacker.name}的助燃] 双攻 +20%")
+
+        # 九尾狐等 [灵魂灼伤]：冰系→烧伤×4；火系→冻结×2
+        if ability == "灵魂灼伤":
+            if skill.skill_type == Type.ICE:
+                defender.burn_stacks += 4
+                engine._log(f"  [{attacker.name}的灵魂灼伤] {defender.name} 烧伤 +4 层")
+            elif skill.skill_type == Type.FIRE:
+                defender.freeze_stacks += 2
+                engine._log(f"  [{attacker.name}的灵魂灼伤] {defender.name} 冻结 +2 层")
+
+        # 魔力猫等 [氧循环]：使用草系技能后，回复 10% HP
+        if ability == "氧循环" and skill.skill_type == Type.GRASS:
+            heal = int(attacker.hp * 0.10)
+            actual_heal = attacker.heal(heal)
+            if actual_heal > 0:
+                engine._log(f"  [{attacker.name}的氧循环] 回复 {actual_heal} HP")
+
+        # 水蓝蓝等 [浸润]：使用水系技能后，全技能能耗 -1（永久叠加）
+        if ability == "浸润" and skill.skill_type == Type.WATER:
+            attacker.energy_cost_reduction += 1
+            engine._log(
+                f"  [{attacker.name}的浸润] 能耗减免累计 {attacker.energy_cost_reduction}"
+            )
+
+        # 针叶巡林等 [野性感官]：自己攻击后清除一次性先手 flag
+        if ability == "野性感官" and attacker.feral_senses_priority:
+            attacker.feral_senses_priority = False
+
         # ---- 龙噬印记：使用 3 能耗技能 → 自身双攻 +30%/层 ----
         from sim.mark_system import MarkType, MarkCategory
         pos_mark = state.get_positive_mark(team)
@@ -493,6 +583,9 @@ class AbilityHooks:
             neg_mark_def = state.get_negative_mark(enemy_team)
             if neg_mark_def and neg_mark_def.mark_type == MarkType.METEOR:
                 stacks = neg_mark_def.stacks
+                # 月牙雪熊 [月牙雪糕]：敌方每层冻结视为 1 层额外星陨
+                if _get_ability_name(attacker) == "月牙雪糕" and defender.freeze_stacks > 0:
+                    stacks += defender.freeze_stacks
                 state.clear_mark(enemy_team, MarkCategory.NEGATIVE)
                 extra_dmg = int(
                     (defender.sp_attack / max(1, attacker.sp_defense)) * 0.9 * 30 * stacks
@@ -531,6 +624,154 @@ class AbilityHooks:
                     f"水/武技能威力 +20%（累计 {cnt} 次）"
                 )
                 break  # 每队只有一个 身经百练
+
+        # 针叶巡林等 [野性感官]：自身使用防御技能即视为应对成功，下次攻击 priority+1
+        if _get_ability_name(user) == "野性感官":
+            user.feral_senses_priority = True
+            engine._log(f"  [{user.name}的野性感官] 下次行动获得先手 +1")
+
+        # 瞌睡王 [慢热型]：在场之外的队友每应对 1 次，累计计数（cap 2）
+        # 仅当瞌睡王在队伍中且不在场时生效
+        sleep_king = next(
+            (p for p in team_list
+             if _get_ability_name(p) == "慢热型" and not p.is_fainted),
+            None,
+        )
+        if sleep_king is not None:
+            cur_idx = state.get_current_idx(team)
+            on_field = team_list[cur_idx] is sleep_king
+            if not on_field:
+                key = f"slow_heat_{team}"
+                cnt = state.ability_counters.get(key, 0)
+                if cnt < 2:
+                    state.ability_counters[key] = cnt + 1
+                    engine._log(
+                        f"  [{sleep_king.name}的慢热型] 队友应对累计 {cnt + 1}/2"
+                    )
+
+    # ------------------------------------------------------------------
+    # 冻结附加（捉迷藏）
+    # ------------------------------------------------------------------
+
+    def on_freeze_applied(
+        self,
+        state: "BattleState",
+        engine,
+        attacker: "Pokemon",
+        defender: "Pokemon",
+        stacks_added: int,
+    ) -> None:
+        """
+        敌方被附加冻结层数后触发。
+        大耳帽兜 [捉迷藏]：自己造成的冻结期间，敌方全技能能耗 +1。
+        """
+        if stacks_added <= 0 or defender.is_fainted:
+            return
+        if _get_ability_name(attacker) == "捉迷藏":
+            defender.hideseek_freeze_active = True
+            defender.extra_energy_cost = 1
+            engine._log(
+                f"  [{attacker.name}的捉迷藏] {defender.name} 冻结期间能耗 +1"
+            )
+
+    # ------------------------------------------------------------------
+    # 状态技能使用后（泛音列）
+    # ------------------------------------------------------------------
+
+    def on_use_status_skill(
+        self,
+        state: "BattleState",
+        engine,
+        user: "Pokemon",
+        target: "Pokemon",
+        skill: "Skill",
+        team: str,
+    ) -> None:
+        """
+        状态技能使用后触发。
+        号儿鱼 [泛音列]：使用状态技能后，敌方 3 回合内全技能能耗 +3（再触发刷新）。
+        """
+        if _get_ability_name(user) == "泛音列" and not target.is_fainted:
+            target.quiet_debuff_turns = 3
+            target.quiet_debuff_extra = 3
+            engine._log(
+                f"  [{user.name}的泛音列] {target.name} 全技能能耗 +3（3 回合）"
+            )
+
+    # ------------------------------------------------------------------
+    # 回合开始（预警 / 哨兵：威胁预测）
+    # ------------------------------------------------------------------
+
+    def on_turn_start(
+        self,
+        state: "BattleState",
+        engine,
+    ) -> None:
+        """
+        回合开始时触发，在 _determine_order 之前调用。
+        预警 / 哨兵：若敌方任一技能能击败自己，本回合速度 +50。
+        """
+        for team in ("a", "b"):
+            current = state.get_current(team)
+            if current.is_fainted:
+                continue
+            ability = _get_ability_name(current)
+            if ability not in ("预警", "哨兵"):
+                continue
+            enemy_team = "b" if team == "a" else "a"
+            enemy = state.get_current(enemy_team)
+            if enemy.is_fainted:
+                continue
+            # 预测敌方任一攻击技能造成的最大伤害（不考虑能耗/CD/应对）
+            from sim.damage_calc import calculate_damage
+            max_dmg = 0
+            for s in enemy.skills:
+                if s.power <= 0:
+                    continue
+                try:
+                    dmg = calculate_damage(
+                        enemy, current, s, weather=state.weather
+                    )
+                except Exception:
+                    dmg = 0
+                if dmg > max_dmg:
+                    max_dmg = dmg
+            if max_dmg >= current.current_hp:
+                current.temp_speed_bonus = 50.0
+                if ability == "哨兵":
+                    current.sentinel_must_switch = True
+                engine._log(
+                    f"  [{current.name}的{ability}] 预警敌方威胁({max_dmg}≥{current.current_hp})，速度+50"
+                )
+
+    def get_temp_speed_bonus(
+        self, state: "BattleState", team: str
+    ) -> float:
+        """
+        返回当前精灵的临时速度加成（预警/哨兵），由引擎在 _determine_order 中使用。
+        """
+        current = state.get_current(team)
+        return current.temp_speed_bonus
+
+    def clear_temp_speed_bonus(self, state: "BattleState") -> None:
+        """回合结束时清空所有精灵的临时速度加成。"""
+        for p in state.team_a + state.team_b:
+            p.temp_speed_bonus = 0.0
+
+    # ------------------------------------------------------------------
+    # 陨落（落陨星兔）：跳过回合结束伤害类效果
+    # ------------------------------------------------------------------
+
+    def is_falling_star_active(self, state: "BattleState") -> bool:
+        """
+        若双方任一在场精灵带 [陨落]，返回 True；
+        引擎据此跳过烧伤伤害 / 中毒伤害 / 印记伤害（不含特性触发与冻毙）。
+        """
+        for team in ("a", "b"):
+            p = state.get_current(team)
+            if not p.is_fainted and _get_ability_name(p) == "陨落":
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # 烧伤衰减拦截
@@ -692,8 +933,66 @@ class AbilityHooks:
                 f"  [光合印记×{pos_mark.stacks}] {current.name} 回合结束获得 {pos_mark.stacks} 能量"
             )
 
-        # ---- 印记伤害（对双方当前场上精灵） ----
-        self.apply_mark_damage(state, engine)
+        # ---- 怖哭菇等 [吸积盘]：回合结束敌方获得 2 层星陨印记 ----
+        for team in ("a", "b"):
+            current = state.get_current(team)
+            if current.is_fainted or _get_ability_name(current) != "吸积盘":
+                continue
+            enemy_team = "b" if team == "a" else "a"
+            existing = state.get_negative_mark(enemy_team)
+            if existing and existing.mark_type == MarkType.METEOR:
+                existing.stacks += 2
+                total = existing.stacks
+            else:
+                state.set_mark(enemy_team, TeamMark(MarkType.METEOR, 2))
+                total = 2
+            engine._log(
+                f"  [{current.name}的吸积盘] {enemy_team} 队星陨印记 +2（共{total}层）"
+            )
+
+        # ---- 不朽：力竭后倒计时复活；归零时满血满能量复活（不补 lives，不强制上场）----
+        from sim.pokemon import ENERGY_MAX
+        from sim.types import StatusType
+        for team in ("a", "b"):
+            for p in state.get_team(team):
+                if p.revive_timer <= 0:
+                    continue
+                p.revive_timer -= 1
+                if p.revive_timer == 0:
+                    p.current_hp        = p.hp
+                    p.energy            = ENERGY_MAX
+                    p.status            = StatusType.NORMAL
+                    p.burn_stacks       = 0
+                    p.poison_stacks     = 0
+                    p.freeze_stacks     = 0
+                    p.atk_boost = p.def_boost = p.spatk_boost = p.spdef_boost = p.speed_boost = 0.0
+                    p.atk_reduce = p.def_reduce = p.spatk_reduce = p.spdef_reduce = p.speed_reduce = 0.0
+                    p.entry_turn        = -1
+                    engine._log(f"  [{p.name}的不朽] 复活！满血满能量回到队伍")
+                else:
+                    engine._log(
+                        f"  [{p.name}的不朽] 复活倒计时 {p.revive_timer} 回合"
+                    )
+
+        # ---- 印记伤害（对双方当前场上精灵；陨落生效时跳过） ----
+        if not self.is_falling_star_active(state):
+            self.apply_mark_damage(state, engine)
+
+        # ---- 捉迷藏：冻结归零时清除 hideseek 标记 + 额外能耗 ----
+        for p in state.team_a + state.team_b:
+            if p.hideseek_freeze_active and p.freeze_stacks <= 0:
+                p.hideseek_freeze_active = False
+                p.extra_energy_cost = 0
+
+        # ---- 泛音列：倒计时递减；归零时清除 ----
+        for p in state.team_a + state.team_b:
+            if p.quiet_debuff_turns > 0:
+                p.quiet_debuff_turns -= 1
+                if p.quiet_debuff_turns == 0:
+                    p.quiet_debuff_extra = 0
+
+        # ---- 预警/哨兵：清空本回合临时速度加成 ----
+        self.clear_temp_speed_bonus(state)
 
     # ------------------------------------------------------------------
     # 印记：能耗修正 / 速度惩罚（由 battle_engine 查询）
@@ -705,17 +1004,22 @@ class AbilityHooks:
         """
         返回印记对技能能耗的修正值（正数=增加，负数=减少）。
         湿润印记：能耗 -1/层；蓄势印记：能耗 +1/层。
+        利灯鱼 [对流]：自身印记能耗修正取反。
         """
         from sim.mark_system import MarkType
         pos_mark = state.get_positive_mark(team)
-        if not pos_mark:
-            return 0
-        if pos_mark.mark_type == MarkType.WET:
-            return -pos_mark.stacks
-        if pos_mark.mark_type == MarkType.CHARGE and skill.power > 0:
-            # 蓄势印记只对攻击技能增加能耗
-            return pos_mark.stacks
-        return 0
+        mod = 0
+        if pos_mark:
+            if pos_mark.mark_type == MarkType.WET:
+                mod = -pos_mark.stacks
+            elif pos_mark.mark_type == MarkType.CHARGE and skill.power > 0:
+                # 蓄势印记只对攻击技能增加能耗
+                mod = pos_mark.stacks
+        # 利灯鱼 [对流]：自身印记能耗修正取反
+        current = state.get_current(team)
+        if _get_ability_name(current) == "对流" and mod != 0:
+            mod = -mod
+        return mod
 
     def get_mark_speed_penalty(self, state: "BattleState", team: str) -> float:
         """

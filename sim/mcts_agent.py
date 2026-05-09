@@ -125,7 +125,10 @@ def run_mcts_battle(
     -------
     "a" / "b" / None（平局/超时）
     """
-    state  = BattleState(team_a=team_a_pokemon, team_b=team_b_pokemon)
+    starter_a = get_starter_idx(agent_a.strategy, team_a_pokemon) or 0
+    starter_b = get_starter_idx(agent_b.strategy, team_b_pokemon) or 0
+    state  = BattleState(team_a=team_a_pokemon, team_b=team_b_pokemon,
+                         current_a=starter_a, current_b=starter_b)
     engine = BattleEngine(state, verbose=verbose)
 
     history: List[Tuple[BattleState, Action, Action]] = []

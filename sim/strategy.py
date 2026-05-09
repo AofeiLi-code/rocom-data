@@ -18,7 +18,8 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from sim.battle_state import BattleState
 from sim.battle_engine import Action
-from sim.types import get_type_effectiveness, SkillCategory
+from sim.types import get_type_effectiveness, SkillCategory, Weather
+from sim.mark_system import MarkCategory
 
 _STRATEGY_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -122,38 +123,93 @@ def _eval_condition(cond: str, state: BattleState, team: str) -> bool:
     """
     评估条件字符串，返回 True/False。
 
-    支持的条件：
-      hp_pct < N          己方当前精灵HP百分比低于N
-      hp_pct > N          己方当前精灵HP百分比高于N
-      energy < N          己方能量低于N
-      energy > N          己方能量高于N
-      type_disadvantaged  己方属性被克制
-      type_advantaged     己方有属性克制对手
-      enemy_hp_pct < N    对手HP低于N%
-      always              无条件触发
-    """
-    me  = state.get_current(team)
-    opp = state.get_current("b" if team == "a" else "a")
-    cond = cond.strip()
+    ── 布尔条件 ──────────────────────────────────────────────
+      always                  无条件触发
+      type_disadvantaged      己方被属性克制（承受 ≥2x 伤害）
+      type_advantaged         己方有属性克制对手的技能
+      ally_has_neg_mark       己方队伍带有任意负面印记
+      enemy_has_pos_mark      敌方队伍带有任意正面印记
 
+    ── 数值比较（支持 < > <= >= ==）─────────────────────────
+      hp_pct < N              己方当前精灵 HP%
+      energy < N              己方当前能量
+      enemy_hp_pct < N        敌方当前精灵 HP%
+      enemy_buff_count > N    敌方正面印记层数（无印记=0）
+      ally_neg_mark_count > N 己方负面印记层数（无印记=0）
+      ally_alive_count < N    己方存活精灵数
+      ally_lives < N          己方剩余生命格（初始4，精灵倒下-1）
+      turn > N                当前回合数
+
+    ── 等值匹配（仅支持 ==）──────────────────────────────────
+      enemy_name == 白金独角兽  敌方当前精灵名称
+      weather == sandstorm    当前天气（sandstorm / rain / none）
+    """
+    me       = state.get_current(team)
+    enemy_id = "b" if team == "a" else "a"
+    opp      = state.get_current(enemy_id)
+    cond     = cond.strip()
+
+    # ── 布尔条件 ──
     if cond == "always":
         return True
     if cond == "type_disadvantaged":
         return _is_type_disadvantaged(me, opp)
     if cond == "type_advantaged":
         return _is_type_advantaged(me, opp)
+    if cond == "ally_has_neg_mark":
+        return state.get_negative_mark(team) is not None
+    if cond == "enemy_has_pos_mark":
+        return state.get_positive_mark(enemy_id) is not None
 
-    # 比较型条件：  "hp_pct < 30"
+    # ── 天气等值匹配：weather == sandstorm ──
+    if cond.startswith("weather"):
+        rest = cond[len("weather"):].strip()
+        if rest.startswith("=="):
+            val = rest[2:].strip().lower()
+            weather_map = {
+                "sandstorm": Weather.SANDSTORM,
+                "rain":      Weather.RAIN,
+                "none":      Weather.NONE,
+            }
+            target = weather_map.get(val)
+            return target is not None and state.weather == target
+        return False
+
+    # ── 敌方精灵名等值匹配：enemy_name == 白金独角兽 ──
+    if cond.startswith("enemy_name"):
+        rest = cond[len("enemy_name"):].strip()
+        if rest.startswith("=="):
+            val = rest[2:].strip()
+            return opp.name == val
+        return False
+
+    # ── 数值比较 ──
+    def _alive_count(t: str) -> float:
+        return float(sum(1 for p in state.get_team(t) if not p.is_fainted))
+
+    def _buff_count(t: str) -> float:
+        mark = state.get_positive_mark(t)
+        return float(mark.stacks) if mark else 0.0
+
+    def _neg_mark_count(t: str) -> float:
+        mark = state.get_negative_mark(t)
+        return float(mark.stacks) if mark else 0.0
+
     for keyword, getter in [
-        ("hp_pct",       lambda: _hp_pct(me)),
-        ("energy",       lambda: float(me.energy)),
-        ("enemy_hp_pct", lambda: _hp_pct(opp)),
+        ("hp_pct",              lambda: _hp_pct(me)),
+        ("energy",              lambda: float(me.energy)),
+        ("enemy_hp_pct",        lambda: _hp_pct(opp)),
+        ("enemy_buff_count",    lambda: _buff_count(enemy_id)),
+        ("ally_neg_mark_count", lambda: _neg_mark_count(team)),
+        ("ally_alive_count",    lambda: _alive_count(team)),
+        ("ally_lives",          lambda: float(state.lives_a if team == "a" else state.lives_b)),
+        ("turn",                lambda: float(state.turn)),
     ]:
         if cond.startswith(keyword):
             rest = cond[len(keyword):].strip()
             try:
-                op, val = rest.split()
-                val = float(val)
+                op, val_str = rest.split(None, 1)
+                val = float(val_str)
                 cur = getter()
                 if op == "<":  return cur < val
                 if op == ">":  return cur > val

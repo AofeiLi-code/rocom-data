@@ -138,6 +138,9 @@ class BattleEngine:
         -------
         胜者 ("a" / "b") 或 None（未分胜负）
         """
+        # 0. 回合开始特性效果（预警/哨兵）
+        _ability_hooks.on_turn_start(self.state, self)
+
         # 1. 先手判定
         first_team, first_act, second_team, second_act = \
             self._determine_order(action_a, action_b)
@@ -147,6 +150,7 @@ class BattleEngine:
         self._execute_action(first_team, first_act, second_team, second_act, is_first=True)
         self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
+        self._maybe_sentinel_escape(first_team)
 
         winner = self.check_winner()
         if winner:
@@ -157,6 +161,7 @@ class BattleEngine:
         self._execute_action(second_team, second_act, first_team, first_act, is_first=False)
         self._apply_life_events(snap, self._fainted_snapshot())
         self._auto_switch()
+        self._maybe_sentinel_escape(second_team)
 
         winner = self.check_winner()
         if winner:
@@ -185,11 +190,19 @@ class BattleEngine:
         self._log(f"  天气变为: {weather.value} (持续{WEATHER_DURATION}回合)")
 
     def _get_effective_energy_cost(self, skill: Skill, team: str = "a") -> int:
-        """获取有效能耗（沙暴减半 + 印记修正）"""
+        """获取有效能耗（沙暴减半 + 印记修正 + 特性修正 + 状态附加）"""
         cost = skill.energy_cost
         if self.state.weather == Weather.SANDSTORM and skill.skill_type == Type.GROUND:
             cost = cost // 2  # 向下取整
         cost += _ability_hooks.get_mark_energy_cost_mod(self.state, team, skill)
+        current = self.state.get_current(team)
+        # 浸润等特性：扣减自身累积的能耗减免
+        cost -= current.energy_cost_reduction
+        # 捉迷藏：冻结期间敌方对自己施加的额外能耗
+        cost += current.extra_energy_cost
+        # 泛音列：被状态技能命中后 3 回合，全技能能耗 +3
+        if current.quiet_debuff_turns > 0:
+            cost += current.quiet_debuff_extra
         return max(0, cost)
 
     # ------------------------------------------------------------------
@@ -205,8 +218,8 @@ class BattleEngine:
         priority_a = self._get_priority("a", action_a)
         priority_b = self._get_priority("b", action_b)
 
-        spd_a = p_a.effective_speed() * (1.0 + priority_a) - _ability_hooks.get_mark_speed_penalty(self.state, "a")
-        spd_b = p_b.effective_speed() * (1.0 + priority_b) - _ability_hooks.get_mark_speed_penalty(self.state, "b")
+        spd_a = (p_a.effective_speed() + _ability_hooks.get_temp_speed_bonus(self.state, "a")) * (1.0 + priority_a) - _ability_hooks.get_mark_speed_penalty(self.state, "a")
+        spd_b = (p_b.effective_speed() + _ability_hooks.get_temp_speed_bonus(self.state, "b")) * (1.0 + priority_b) - _ability_hooks.get_mark_speed_penalty(self.state, "b")
 
         if spd_a >= spd_b:
             return "a", action_a, "b", action_b
@@ -262,15 +275,39 @@ class BattleEngine:
 
         skill = current.skills[action[0]]
 
-        # ---- 能量不足 → 强制聚能 ----
+        # ---- 能量不足 → 阿米亚特[石头大餐] 改用 HP 代替；否则强制聚能 ----
         cost = self._get_effective_energy_cost(skill, team)
+        from sim.ability_engine import _get_ability_name as _ab_name
         if current.energy < cost:
-            old_e = current.energy
-            current.gain_energy(self.GATHER_ENERGY)
-            self._log(f"[{team.upper()}] {current.name} 能量不足({current.energy}<{cost})，改为聚能 (能量:{old_e}→{current.energy})")
-            return
-
-        current.energy -= cost
+            if _ab_name(current) == "石头大餐":
+                missing = cost - current.energy
+                hp_pay = int(current.hp * 0.05) * missing
+                # 仅扣 HP（即使会到 0 也允许）；用全部能量 + HP 替代
+                used_energy = current.energy
+                current.energy = 0
+                # 用 take_damage 但保护“即使 0 也允许使用”
+                if hp_pay > 0:
+                    actual = min(current.current_hp, hp_pay)
+                    current.current_hp -= actual
+                    if current.current_hp <= 0:
+                        current.current_hp = 0
+                        from sim.types import StatusType as _ST
+                        current.status = _ST.FAINTED
+                self._log(
+                    f"[{team.upper()}] {current.name} 石头大餐：消耗 {used_energy} 能量"
+                    f" + 5%×{missing}={hp_pay} HP 代替缺口"
+                )
+                # 若用完导致倒下，无法继续行动
+                if current.is_fainted:
+                    return
+                # 跳过普通扣能（已扣 0）
+            else:
+                old_e = current.energy
+                current.gain_energy(self.GATHER_ENERGY)
+                self._log(f"[{team.upper()}] {current.name} 能量不足({current.energy}<{cost})，改为聚能 (能量:{old_e}→{current.energy})")
+                return
+        else:
+            current.energy -= cost
 
         # ---- 脱离 ----
         if skill.force_switch:
@@ -298,6 +335,7 @@ class BattleEngine:
             old_hp_user = current.current_hp
             old_hp_enemy = enemy.current_hp
             self._apply_status_skill(current, enemy, skill)
+            _ability_hooks.on_use_status_skill(self.state, self, current, enemy, skill, team)
             parts = []
             if skill.poison_stacks > 0: parts.append(f"中毒{skill.poison_stacks}层")
             if skill.burn_stacks > 0: parts.append(f"灼烧{skill.burn_stacks}层")
@@ -359,7 +397,7 @@ class BattleEngine:
         if skill.enemy_lose_energy > 0:
             target.lose_energy(skill.enemy_lose_energy)
 
-        self._apply_status_stacks(target, skill)
+        self._apply_status_stacks(target, skill, attacker=user)
 
         if skill.force_switch:
             team = self._find_team_of(user)
@@ -390,7 +428,7 @@ class BattleEngine:
         defender.apply_enemy_debuff(skill)
 
         # 3. 状态层数附加
-        self._apply_status_stacks(defender, skill)
+        self._apply_status_stacks(defender, skill, attacker=attacker)
 
         # 4. 能量效果
         if skill.steal_energy > 0:
@@ -523,14 +561,18 @@ class BattleEngine:
     # ------------------------------------------------------------------
     # 辅助方法
     # ------------------------------------------------------------------
-    def _apply_status_stacks(self, target: Pokemon, skill: Skill) -> None:
-        """附加异常状态层数"""
+    def _apply_status_stacks(self, target: Pokemon, skill: Skill, attacker: Optional[Pokemon] = None) -> None:
+        """附加异常状态层数；attacker 用于触发 on_freeze_applied 等特性 hook"""
         if skill.poison_stacks > 0:
             target.poison_stacks += skill.poison_stacks
         if skill.burn_stacks > 0:
             target.burn_stacks += skill.burn_stacks
         if skill.freeze_stacks > 0:
             target.freeze_stacks += skill.freeze_stacks
+            if attacker is not None:
+                _ability_hooks.on_freeze_applied(
+                    self.state, self, attacker, target, skill.freeze_stacks
+                )
 
     def _apply_self_recovery(self, user: Pokemon, skill: Skill) -> None:
         """自身回复 HP 和能量"""
@@ -557,6 +599,27 @@ class BattleEngine:
         if alive:
             new_idx = random.choice(alive)
             self.state.set_current_idx(team, new_idx)
+
+    def _maybe_sentinel_escape(self, team: str) -> None:
+        """优优 [哨兵]：行动后若 sentinel_must_switch 标记为真，强制脱离"""
+        team_list = self.state.get_team(team)
+        cur_idx = self.state.get_current_idx(team)
+        cur = team_list[cur_idx]
+        if not cur.sentinel_must_switch or cur.is_fainted:
+            cur.sentinel_must_switch = False
+            return
+        cur.sentinel_must_switch = False
+        # 最后一只精灵 → 不脱离
+        alive_others = [i for i, p in enumerate(team_list)
+                        if not p.is_fainted and i != cur_idx]
+        if not alive_others:
+            return
+        self._apply_escape(team, team_list, cur_idx)
+        new_idx = self.state.get_current_idx(team)
+        new_p = team_list[new_idx]
+        self._log(f"  [{cur.name}的哨兵] 行动后强制脱离 → {new_p.name} 登场")
+        # 触发换入特性
+        _ability_hooks.on_switch_in(self.state, self, team, new_idx)
 
     def _get_enemy_skill(self, enemy: Pokemon, enemy_action: Action) -> Optional[Skill]:
         """获取对方使用的技能（若有的话）"""
@@ -609,9 +672,11 @@ class BattleEngine:
                 self._log(f"  天气 {self.state.weather.value} 消散了")
                 self.state.weather = Weather.NONE
 
-        # --- 2-5. 异常状态处理（仅场上精灵，非印记效果切出即清除） ---
-        for team_key in ("team_a", "team_b"):
-            team_list = getattr(self.state, team_key)
+        # 陨落：双方任一在场精灵带「陨落」时，跳过伤害类回合结束效果
+        falling_star = _ability_hooks.is_falling_star_active(self.state)
+        if falling_star:
+            self._log("  [陨落] 跳过本回合烧伤/中毒/寄生伤害")
+
         # --- 2-5. 异常状态处理（仅场上精灵，非印记效果切出即清除） ---
         for team_key in ("team_a", "team_b"):
             team_list = getattr(self.state, team_key)
@@ -621,12 +686,13 @@ class BattleEngine:
             if p.is_fainted:
                 continue
 
-            # --- 2. 烧伤 ---
+            # --- 2. 烧伤（陨落跳过伤害；层数衰减/增长仍然执行） ---
             if p.burn_stacks > 0:
-                dmg = int(p.hp * 0.02 * p.burn_stacks)
-                if dmg > 0:
-                    p.take_damage(dmg)
-                    self._log(f"  {p.name} 烧伤伤害 {dmg} ({p.burn_stacks}层)")
+                if not falling_star:
+                    dmg = int(p.hp * 0.02 * p.burn_stacks)
+                    if dmg > 0:
+                        p.take_damage(dmg)
+                        self._log(f"  {p.name} 烧伤伤害 {dmg} ({p.burn_stacks}层)")
                 # 燃薪虫[煤渣草]在场时增长而非衰减
                 if _ability_hooks.intercept_burn_decay(self.state, self, p):
                     p.burn_stacks += 1
@@ -638,8 +704,8 @@ class BattleEngine:
             if p.is_fainted:
                 continue
 
-            # --- 3. 中毒 ---
-            if p.poison_stacks > 0:
+            # --- 3. 中毒（陨落跳过伤害） ---
+            if p.poison_stacks > 0 and not falling_star:
                 dmg = int(p.hp * 0.03 * p.poison_stacks)
                 if dmg > 0:
                     p.take_damage(dmg)
@@ -648,8 +714,8 @@ class BattleEngine:
             if p.is_fainted:
                 continue
 
-            # --- 4. 寄生 ---
-            if p.parasited_by is not None:
+            # --- 4. 寄生（陨落跳过伤害） ---
+            if p.parasited_by is not None and not falling_star:
                 dmg = int(p.hp * 0.08)
                 if dmg > 0:
                     actual = p.take_damage(dmg)
@@ -666,7 +732,7 @@ class BattleEngine:
             if p.is_fainted:
                 continue
 
-            # --- 5. 冻结判定 ---
+            # --- 5. 冻结判定（陨落不跳过冻毙）---
             if p.freeze_stacks > 0:
                 threshold = p.freeze_threshold
                 if p.current_hp < threshold:

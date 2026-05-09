@@ -1,0 +1,222 @@
+[
+  {
+    "ability": "不朽",
+    "mechanic": "力竭后3回合复活，复活时通常恢复全部生命和能量（描述未明确，需补充）",
+    "hooks": [
+      "on_faint",
+      "on_turn_end"
+    ],
+    "needs_state": "Pokemon 字段: revive_timer (int, 死亡倒数，>0表示已死亡等待复活) 或 fainted 状态标记",
+    "needs_new_hook": false,
+    "complexity": "medium",
+    "ambiguity": "复活后的HP/能量状态未说明，假设满状态复活；复活后是否自动换上场？假设当回合结束时复活并强制换上场（若队伍有空位）",
+    "pseudocode": "on_faint(pokemon):\n    pokemon.revive_timer = 4  # 3回合后复活，需多1回合计数\non_turn_end:\n    for each fainted pokemon with revive_timer>0:\n        revive_timer -= 1\n        if revive_timer == 0:\n            pokemon.is_fainted = False\n            pokemon.current_hp = pokemon.hp\n            engine.force_switch_into(pokemon)"
+  },
+  {
+    "ability": "预警",
+    "mechanic": "回合开始时，若敌方当前精灵能够一击击败自己，则获得速度+50（数值，可能仅当回合有效）",
+    "hooks": [
+      "on_turn_start"
+    ],
+    "needs_state": "无需额外字段",
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "速度+50是永久还是仅当回合？若多回合均满足条件是否叠加？假设不叠加，仅临时增益，回合结束时清除；需要定义能否重复触发",
+    "pseudocode": "on_turn_start(pokemon):\n    enemy = state.get_current(opponent_team)\n    if can_ohko(enemy, pokemon):\n        pokemon.speed_boost += 50  # 或直接设置临时速度加成"
+  },
+  {
+    "ability": "泛音列",
+    "mechanic": "使用变化技能后，敌方命中率下降1级，持续3回合（聒噪效果）",
+    "hooks": [
+      "on_use_skill"
+    ],
+    "needs_state": "Pokemon 字段: shriek_turns (int) 剩余聒噪回合数",
+    "needs_new_hook": true,
+    "complexity": "medium",
+    "ambiguity": "聒噪效果具体为命中-1；持续3回合是否可被同类效果覆盖或叠加？假设不可叠加，仅刷新持续时间",
+    "pseudocode": "on_use_skill(user, skill):\n    if skill.category == STATUS:\n        target = state.get_current(opponent_team)\n        target.accuracy_stages = max(target.accuracy_stages - 1, -6)\n        target.shriek_turns = 3\non_turn_end: for each pokemon with shriek_turns>0: shriek_turns--; if ==0 remove accuracy debuff"
+  },
+  {
+    "ability": "哨兵",
+    "mechanic": "回合开始时若敌方可一击击败自己，获得速度+50，并在本回合行动后强制换下",
+    "hooks": [
+      "on_turn_start",
+      "on_post_attack"
+    ],
+    "needs_state": "Pokemon 字段: sentinel_trigger (bool) 标记本回合是否已触发",
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "脱离指强制换人，若后备无精灵则如何处理？速度+50是否仅当回合存在？假设仅当回合，行动后增益移除并换人",
+    "pseudocode": "on_turn_start(pokemon):\n    if can_ohko(enemy, pokemon):\n        pokemon.speed_boost = 50\n        pokemon.sentinel_trigger = True\non_post_attack(attacker):\n    if attacker.sentinel_trigger:\n        engine.force_switch(attacker.team)"
+  },
+  {
+    "ability": "捉迷藏",
+    "mechanic": "自己给敌方施加冻结时，额外使敌方所有技能的能量消耗永久+1（可叠加）",
+    "hooks": [
+      "on_inflict_status"
+    ],
+    "needs_state": "Pokemon 字段: energy_cost_penalty (int) 所有技能额外能耗",
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "全技能能耗+1是否对每个技能独立，还是统一一个计数器对所有技能生效？假设统一计数器，叠加无上限",
+    "pseudocode": "on_inflict_status(inflicter, target, status):\n    if status == FREEZE:\n        target.energy_cost_penalty += 1\n# 在使用技能计算能量消耗时，最终cost = base_cost + energy_cost_penalty"
+  },
+  {
+    "ability": "冰钻",
+    "mechanic": "敌方携带的所有技能总能耗每有1点，自身攻击威力+10%",
+    "hooks": [
+      "get_attack_mods"
+    ],
+    "needs_state": false,
+    "needs_new_hook": false,
+    "complexity": "low",
+    "ambiguity": "威力加成是百分比乘算，总能耗上限可能较高，威力可大幅提升",
+    "pseudocode": "get_attack_mods(attacker, defender, skill):\n    total_cost = sum(s.energy_cost for s in defender.skills)\n    power_mult = 1 + 0.1 * total_cost\n    return AttackModContext(power_mult=power_mult)"
+  },
+  {
+    "ability": "灵魂灼伤",
+    "mechanic": "使用冰系技能时使敌方获得4层灼烧；使用火系技能时使敌方获得2层冻结",
+    "hooks": [
+      "on_use_skill"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "low",
+    "ambiguity": "灼烧和冻结层数上限需按引擎规则处理；是否所有技能（包括变化）均触发？假设是",
+    "pseudocode": "on_use_skill(user, skill):\n    if skill.skill_type == ICE:\n        target.add_burn_stacks(4)\n    elif skill.skill_type == FIRE:\n        target.add_freeze_stacks(2)"
+  },
+  {
+    "ability": "助燃",
+    "mechanic": "使用火系技能后，自身物攻和特攻提升20%（永久，可叠加）",
+    "hooks": [
+      "on_use_skill"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "low",
+    "ambiguity": "双攻提升20%是基础能力值乘1.2，还是按等级？假设为能力值倍率，可叠加",
+    "pseudocode": "on_use_skill(user, skill):\n    if skill.skill_type == FIRE:\n        user.atk_boost += 0.2\n        user.spatk_boost += 0.2"
+  },
+  {
+    "ability": "稀兽花宝",
+    "mechanic": "入场时根据自身血脉种类获得不同效果（具体效果依赖游戏数据）",
+    "hooks": [
+      "on_switch_in"
+    ],
+    "needs_state": "Pokemon 字段: bloodline (string) 血脉标识",
+    "needs_new_hook": false,
+    "complexity": "high",
+    "ambiguity": "血脉定义及效果表未知，需额外数据支持；若无法获取具体效果，该特性无法实现",
+    "pseudocode": "on_switch_in(pokemon):\n    effects = {\"bloodline_A\": lambda p: p.atk_boost += 0.2, ...}\n    if pokemon.bloodline in effects:\n        effects[pokemon.bloodline](pokemon)"
+  },
+  {
+    "ability": "慢热型",
+    "mechanic": "初始能量为0；上场前己方其他精灵每成功应对一次，自身回复5能量",
+    "hooks": [
+      "on_switch_in",
+      "on_counter_success"
+    ],
+    "needs_state": "BattleState 字段: counter_successes (int) 己方成功应对次数（战斗开始时初始化为0）",
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "成功应对定义不明确，可能指闪避、格挡或防御技能抵消攻击；需明确具体触发条件",
+    "pseudocode": "on_battle_start: state.counter_successes = 0\non_counter_success(pokemon): state.counter_successes += 1\non_switch_in(pokemon):\n    if pokemon.ability == '慢热型':\n        pokemon.energy = min(5 * state.counter_successes, pokemon.max_energy)"
+  },
+  {
+    "ability": "陨落",
+    "mechanic": "自己在场时，双方回合结束触发的效果执行次数-1（如烧伤伤害跳过一次）",
+    "hooks": [
+      "intercept_turn_end"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "哪些效果算回合结束触发？状态伤害、印记伤害、天气等，需明确列表；-1可能使单次触发变为不触发",
+    "pseudocode": "on_turn_end_effect(effect):\n    if state.get_current(ally_team).has_ability('陨落') or state.get_current(enemy_team).has_ability('陨落'):\n        effect.trigger_count = max(effect.trigger_count - 1, 0)\n        if effect.trigger_count == 0:\n            effect.skip = True"
+  },
+  {
+    "ability": "石头大餐",
+    "mechanic": "技能能量不足时，可用5%最大HP替代1点能量（每缺少1点消耗5%HP）",
+    "hooks": [
+      "on_energy_payment"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "medium",
+    "ambiguity": "消耗的是最大HP的5%；若HP不足是否无法使用技能？若生命足够则扣除HP并视为足额能量",
+    "pseudocode": "on_energy_payment(pokemon, required, current_energy):\n    missing = required - current_energy\n    if missing > 0:\n        hp_cost = missing * 0.05 * pokemon.hp\n        if pokemon.current_hp > hp_cost:\n            pokemon.current_hp -= hp_cost\n            return required  # 支付成功\n        else:\n            return -1  # 无法支付"
+  },
+  {
+    "ability": "野性感官",
+    "mechanic": "成功应对后，下一次主动使用技能获得先手+1",
+    "hooks": [
+      "on_counter_success",
+      "get_priority_bonus"
+    ],
+    "needs_state": "Pokemon 字段: feral_senses (bool) 标记下一次技能先手+1",
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "成功应对定义模糊；先手+1是增加优先级数，计数消耗一次后移除",
+    "pseudocode": "on_counter_success(pokemon):\n    pokemon.feral_senses = True\n\nget_priority_bonus(state, team, skill_idx, skill):\n    pokemon = state.get_team(team)[...]\n    if pokemon.feral_senses:\n        pokemon.feral_senses = False\n        return 1.0"
+  },
+  {
+    "ability": "浸润",
+    "mechanic": "使用水系技能后，自身所有技能的能耗永久-1（最低0）",
+    "hooks": [
+      "on_use_skill"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "low",
+    "ambiguity": "能耗减少是否可叠加？假设每次使用水系技能均永久-1，可叠加至0",
+    "pseudocode": "on_use_skill(user, skill):\n    if skill.skill_type == WATER:\n        for s in user.skills:\n            s.energy_cost = max(0, s.energy_cost - 1)"
+  },
+  {
+    "ability": "氧循环",
+    "mechanic": "使用草系技能后，回复自身10%最大生命",
+    "hooks": [
+      "on_use_skill"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "low",
+    "ambiguity": "回复最大HP的10%，不可超过生命上限",
+    "pseudocode": "on_use_skill(user, skill):\n    if skill.skill_type == GRASS:\n        user.current_hp = min(user.hp, user.current_hp + 0.1 * user.hp)"
+  },
+  {
+    "ability": "吸积盘",
+    "mechanic": "回合结束时，敌方获得2层星陨印记",
+    "hooks": [
+      "on_turn_end"
+    ],
+    "needs_state": false,
+    "needs_new_hook": false,
+    "complexity": "low",
+    "ambiguity": "星陨印记为已有印记类型，直接施加2层，叠加无特殊说明",
+    "pseudocode": "on_turn_end:\n    enemy = state.get_current(opponent_team)\n    state.set_mark(opponent_team, TeamMark.STARFALL, enemy.starfall_stacks + 2)"
+  },
+  {
+    "ability": "月牙雪糕",
+    "mechanic": "使用攻击技能时，敌方每层冻结视为1层额外星陨印记来计算伤害",
+    "hooks": [
+      "get_effective_mark_stacks"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "星陨印记的具体伤害效果未知，假设每层提供固定加成；冻结层仅参与印记伤害计算，不修改实际印记层数",
+    "pseudocode": "get_effective_mark_stacks(target, mark_type):\n    if mark_type == STARFALL:\n        return target.starfall_stacks + target.freeze_stacks\n    return target.starfall_stacks"
+  },
+  {
+    "ability": "对流",
+    "mechanic": "自身受到的能耗增加效果变为能耗降低，能耗降低效果变为能耗增加（净变化反转）",
+    "hooks": [
+      "modify_final_energy_cost"
+    ],
+    "needs_state": false,
+    "needs_new_hook": true,
+    "complexity": "high",
+    "ambiguity": "反转基于基础能耗与修改后能耗的差值；若净变化为0则不变；最低能耗为1",
+    "pseudocode": "modify_final_energy_cost(pokemon, skill, base_cost, modified_cost):\n    if pokemon.has_ability('对流'):\n        delta = modified_cost - base_cost\n        return max(1, base_cost - delta)\n    return modified_cost"
+  }
+]

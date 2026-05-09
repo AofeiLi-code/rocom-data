@@ -5,24 +5,28 @@ chcp 65001 >nul
 cls
 echo.
 echo  ============================================
-echo    Rocom Helper  v1.1
+echo    Rocom Helper  v1.2
 echo  ============================================
-echo    1. Scrape all sprites
-echo    2. Check for updates
-echo    3. Browse sprites
-echo    4. Battle simulator / MCTS AI
-echo    5. PVP auto-challenge
-echo    6. Exit
+echo    1. Scrape sprites              (rocom wiki)
+echo    2. Check for sprite updates
+echo    3. Scrape BWIKI lineups        (player teams)
+echo    4. Browse sprites              (viewer)
+echo    5. Battle simulator            (teams / import / PVP / LLM)
+echo    6. Train MCTS                  (self-play loop)
+echo    7. Manage experience DB
+echo    0. Exit
 echo  ============================================
 echo.
-set /p choice= Select [1-6]:
+set /p choice= Select [0-7]:
 
 if "%choice%"=="1" goto scrape
 if "%choice%"=="2" goto check
-if "%choice%"=="3" goto view
-if "%choice%"=="4" goto battle
-if "%choice%"=="5" goto pvp
-if "%choice%"=="6" goto end
+if "%choice%"=="3" goto lineups
+if "%choice%"=="4" goto view
+if "%choice%"=="5" goto battle
+if "%choice%"=="6" goto train
+if "%choice%"=="7" goto dbmanage
+if "%choice%"=="0" goto end
 goto menu
 
 :scrape
@@ -39,6 +43,13 @@ echo.
 pause
 goto menu
 
+:lineups
+echo.
+python -X utf8 lineup_scraper.py
+echo.
+pause
+goto menu
+
 :view
 python -X utf8 viewer.py
 goto menu
@@ -47,8 +58,14 @@ goto menu
 python -X utf8 battle.py
 goto menu
 
-:pvp
-python -X utf8 battle.py --pvp
+:train
+python -X utf8 train.py
+echo.
+pause
+goto menu
+
+:dbmanage
+python -X utf8 db_manage.py
 echo.
 pause
 goto menu

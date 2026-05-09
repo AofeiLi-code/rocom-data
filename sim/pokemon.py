@@ -84,9 +84,33 @@ class Pokemon:
     # 嫁祸特性：已触发的 HP 里程碑位标志（bit0=75%, bit1=50%, bit2=25%）
     hp_milestone_flags: int = 0
 
+    # 野性感官：成功应对后置 True，下次自己攻击时 priority+1 后清除
+    feral_senses_priority: bool = False
+    # 浸润：每次使用水系技能后 +1，全技能能耗扣减此值（最低 0）
+    energy_cost_reduction: int = 0
+    # 不朽：力竭后倒计时回合数（>0 表示等待复活；0 = 未死或未触发）
+    revive_timer: int = 0
+    # 捉迷藏：本精灵的冻结是否由「捉迷藏」造成（用于敌方每回合 +1 能耗）
+    hideseek_freeze_active: bool = False
+    # 捉迷藏附加：被捉迷藏冻结时，全技能能耗 +N（每回合检查冻结存续）
+    extra_energy_cost: int = 0
+    # 泛音列：剩余回合数 / 每技能能耗加成（一般 3/3）
+    quiet_debuff_turns: int = 0
+    quiet_debuff_extra: int = 0
+    # 预警/哨兵：本回合临时速度加成（结束时清零）
+    temp_speed_bonus: float = 0.0
+    # 哨兵：行动后强制脱离 flag
+    sentinel_must_switch: bool = False
+
     def __post_init__(self):
         if self.current_hp == 0:
             self.current_hp = self.hp
+        # 慢热型：初始能量覆盖为 0
+        ab = (self.ability or "").replace("技能图标 ", "").strip()
+        if ":" in ab:
+            ab = ab.split(":")[0].strip()
+        if ab == "慢热型":
+            self.energy = 0
 
     # ------------------------------------------------------------------
     # 状态查询
@@ -251,4 +275,13 @@ class Pokemon:
         p.entry_turn = self.entry_turn
         p.hit_count_bonus = self.hit_count_bonus
         p.hp_milestone_flags = self.hp_milestone_flags
+        p.feral_senses_priority = self.feral_senses_priority
+        p.energy_cost_reduction = self.energy_cost_reduction
+        p.revive_timer = self.revive_timer
+        p.hideseek_freeze_active = self.hideseek_freeze_active
+        p.extra_energy_cost = self.extra_energy_cost
+        p.quiet_debuff_turns = self.quiet_debuff_turns
+        p.quiet_debuff_extra = self.quiet_debuff_extra
+        p.temp_speed_bonus = self.temp_speed_bonus
+        p.sentinel_must_switch = self.sentinel_must_switch
         return p

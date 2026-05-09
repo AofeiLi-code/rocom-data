@@ -716,8 +716,29 @@ def _menu_batch() -> None:
 
 
 # ============================================================
-# 菜单：5. 从图片导入队伍
+# 菜单：5. 导入队伍（图片 / Wiki）
 # ============================================================
+def _menu_import() -> None:
+    """导入队伍入口 — 让用户选择来源（图片识别 或 BWIKI 玩家配队）。"""
+    print(f"\n{SEP}")
+    print("  导入队伍 — 选择来源")
+    print(SEP)
+    print("  1. 从图片导入       （识别 import_images/ 下的标准组队分享图）")
+    print("  2. 从 BWIKI 导入    （选用 data/lineups.json 中的玩家配队）")
+    print("  0. 返回")
+    print(SEP)
+
+    try:
+        choice = input("  选择 [0-2]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if choice == "1":
+        _menu_import_from_image()
+    elif choice == "2":
+        _menu_import_from_wiki()
+
+
 def _pick_parse_method() -> Optional[str]:
     """让用户选择解析方式，返回 'api' | 'ocr_rapid' | 'ocr_easy' | None"""
     from sim.team_image_parser_ocr import get_available_engines
@@ -797,7 +818,7 @@ def _do_parse(img_path: str, method: str) -> Optional[dict]:
         return None
 
 
-def _menu_import_image() -> None:
+def _menu_import_from_image() -> None:
     os.makedirs(_IMPORT_DIR, exist_ok=True)
 
     # 扫描 import_images/ 下的图片文件
@@ -883,6 +904,133 @@ def _menu_import_image() -> None:
     save_result = add_team(final_name, valid_members)
     verb = "已覆盖" if save_result == "replaced" else "已保存"
     print(f"\n  队伍「{final_name}」{verb}！可在对战菜单中选用。")
+
+
+def _menu_import_from_wiki() -> None:
+    """从 BWIKI 玩家配队导入 — 浏览 data/lineups.json，选一支保存到名册。"""
+    from sim.lineups_loader import load_lineups, lineup_to_members
+
+    lineups = load_lineups()
+    if not lineups:
+        print("\n  [!] data/lineups.json 不存在或为空。")
+        print("  请先运行 BWIKI 抓取脚本生成数据。")
+        return
+
+    # 类型筛选
+    print(f"\n{SEP}")
+    print(f"  BWIKI 玩家配队（共 {len(lineups)} 支）")
+    print(SEP)
+    print("  1. 全部")
+    print("  2. 仅 PVP")
+    print("  3. 仅 PVE")
+    print("  0. 返回")
+    try:
+        flt = input("  选择 [0-3]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if flt == "0":
+        return
+    if flt == "2":
+        filtered = [x for x in lineups if x.get("type") == "pvp"]
+    elif flt == "3":
+        filtered = [x for x in lineups if x.get("type") == "pve"]
+    else:
+        filtered = list(lineups)
+    if not filtered:
+        print("  [!] 无符合条件的配队")
+        return
+
+    # 分页浏览
+    page_size = 20
+    page = 0
+    total_pages = (len(filtered) + page_size - 1) // page_size
+    while True:
+        start = page * page_size
+        end = min(start + page_size, len(filtered))
+        print(f"\n{LINE}  第 {page + 1}/{total_pages} 页（共 {len(filtered)} 支）")
+        for i in range(start, end):
+            lp = filtered[i]
+            tag = lp.get("type", "?").upper()
+            title = lp.get("title", "(无名)")
+            author = lp.get("author") or "佚名"
+            print(f"    {i + 1:3}. [{tag}] {title}  — by {author}")
+        print(f"  输入序号选用；n=下一页, p=上一页, 0=取消：", end="")
+        try:
+            raw = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if raw == "0" or not raw:
+            return
+        if raw == "n":
+            if page + 1 < total_pages:
+                page += 1
+            continue
+        if raw == "p":
+            if page > 0:
+                page -= 1
+            continue
+        if not raw.isdigit() or not (1 <= int(raw) <= len(filtered)):
+            print("  [!] 无效输入")
+            continue
+        chosen = filtered[int(raw) - 1]
+        break
+
+    # 转换 + 预览
+    members = lineup_to_members(chosen)
+    if not members:
+        print("  [!] 该配队无有效成员，已取消")
+        return
+
+    print(f"\n{SEP}")
+    print(f"  已选：{chosen.get('title', '(无名)')}（{chosen.get('type', '?').upper()}）")
+    print(f"  作者：{chosen.get('author') or '佚名'}")
+    if chosen.get("intro"):
+        print(f"  简介：{chosen['intro']}")
+    print(LINE)
+    for i, m in enumerate(members, 1):
+        skills_str = ", ".join(m["skills"])
+        nature_str = f"  性格:{m['nature']}" if m.get("nature") else ""
+        print(f"    {i}. {m['pokemon']:<12}{nature_str}")
+        print(f"       技能：{skills_str}")
+    print(f"\n  ⚠ BWIKI 数据中的「血脉」「个体值」会被忽略（sim 引擎不实现）")
+
+    # 队伍命名
+    default_name = chosen.get("title") or f"BWIKI-{chosen.get('id', '?')}"
+    print(f"\n  队伍名称（直接回车使用「{default_name}」，或输入新名称）：", end="")
+    try:
+        custom_name = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    final_name = custom_name if custom_name else default_name
+
+    # 与预设同名检测（预设不可覆盖）
+    existing = get_team_def(final_name)
+    if existing and existing.get("preset"):
+        print(f"  [!] 「{final_name}」是内置预设名，请重新输入队伍名称：", end="")
+        try:
+            final_name = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not final_name:
+            print("  已取消")
+            return
+
+    print(f"\n  确认保存队伍「{final_name}」（{len(members)} 只精灵）？(Y/n)：", end="")
+    try:
+        confirm = input().strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if confirm == "n":
+        print("  已取消")
+        return
+
+    try:
+        save_result = add_team(final_name, members)
+    except ValueError as e:
+        print(f"  [!] {e}")
+        return
+    verb = "已覆盖" if save_result == "replaced" else "已保存"
+    print(f"\n  队伍「{final_name}」{verb}！可在「管理队伍」与「开始对战」中选用。")
 
 
 # ============================================================
@@ -1033,7 +1181,7 @@ def main() -> None:
         print("  2. 新建队伍        （交互组队并保存）")
         print("  3. 管理队伍        （查看 / 删除 / 重命名）")
         print("  4. 批量模拟        （选两支队伍跑 N 场，支持并发加速）")
-        print("  5. 从图片导入队伍  （识别标准组队分享图）")
+        print("  5. 导入队伍        （图片识别 / BWIKI 玩家配队）")
         print("  6. PVP 自动挑战    （咔咔鸟脚本，控制游戏客户端）")
         print("  7. LLM 辅助        （AI组队、生成策略、查看经验文档）")
         print("  0. 返回")
@@ -1056,7 +1204,7 @@ def main() -> None:
         elif choice == "4":
             _menu_batch()
         elif choice == "5":
-            _menu_import_image()
+            _menu_import()
         elif choice == "6":
             _menu_pvp()
         elif choice == "7":
