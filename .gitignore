@@ -9,3 +9,9 @@ data/failed_urls.txt
 __pycache__/
 .DS_Store
 *.pyc
+
+# 运行时日志与调试截图
+logs/
+
+# Python packaging 构建产物
+*.egg-info/

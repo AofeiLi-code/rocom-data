@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "win-util"
+version = "0.1.0"
+description = "Windows UI 自动化工具 - 图像识别、鼠标键盘控制、OCR"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name"}
+]
+keywords = ["windows", "automation", "image-recognition", "ocr", "mouse", "keyboard"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "numpy>=1.26.0",
+    "Pillow>=10.0.0",
+    "pywin32>=300",
+    "mss>=10.0.0",
+    "opencv-python>=4.8.0",
+    "aircv>=1.4.0",
+    "easyocr>=1.7.0",
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourname/win-util"
+Repository = "https://github.com/yourname/win-util"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["win_util*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+win_util = ["py.typed"]
