@@ -1,6 +1,11 @@
 requests
 beautifulsoup4
 
+# PVP 自动战斗功能（game_control / pvp 模块）：
+loguru                     # 日志
+pywin32                    # Windows 窗口操作（win32gui / win32api）
+opencv-python              # 图像识别（模板匹配）
+
 # 队伍图片导入功能（二选一，或两者都装）：
 anthropic                  # API 识别（精度最高，需配置 ANTHROPIC_API_KEY）
 # rapidocr-onnxruntime    # 本地 OCR（轻量，~50MB，首次运行自动下载模型）

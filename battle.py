@@ -27,6 +27,7 @@ from sim.team_roster import (
     list_teams, build_team, add_team, delete_team, rename_team, get_team_def
 )
 from sim.mcts_agent import MCTSAgent
+from sim.strategy import get_starter_idx
 
 # MCTS 每回合迭代次数（可调整：20 快速 / 100 标准 / 200 强力）
 _MCTS_ITERS_BATTLE = 100   # 单局对战
@@ -115,20 +116,23 @@ def run_battle(
     运行一场对战（随机 AI），verbose=True 时实时打印日志。
     返回胜者 "a" / "b" 或 None（平局/超时）。
     """
-    state = BattleState(team_a=team_a, team_b=team_b)
+    agent_a = MCTSAgent("a", label_a, iterations=_MCTS_ITERS_BATTLE)
+    agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATTLE)
+
+    starter_a = get_starter_idx(agent_a.strategy, team_a) or 0
+    starter_b = get_starter_idx(agent_b.strategy, team_b) or 0
+    state = BattleState(team_a=team_a, team_b=team_b,
+                        current_a=starter_a, current_b=starter_b)
     engine = BattleEngine(state, verbose=verbose)
 
     if verbose:
         print(f"\n{SEP}")
         print(f"  {label_a}  VS  {label_b}")
-        skills_a = [s.name for s in team_a[0].skills]
-        skills_b = [s.name for s in team_b[0].skills]
-        print(f"  先锋: {team_a[0].name}[{', '.join(skills_a)}]")
-        print(f"        vs  {team_b[0].name}[{', '.join(skills_b)}]")
+        skills_a = [s.name for s in team_a[starter_a].skills]
+        skills_b = [s.name for s in team_b[starter_b].skills]
+        print(f"  先锋: {team_a[starter_a].name}[{', '.join(skills_a)}]")
+        print(f"        vs  {team_b[starter_b].name}[{', '.join(skills_b)}]")
         print(SEP)
-
-    agent_a = MCTSAgent("a", label_a, iterations=_MCTS_ITERS_BATTLE)
-    agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATTLE)
     history = []
 
     winner = None
@@ -182,7 +186,10 @@ def run_batch(
     agent_b = MCTSAgent("b", label_b, iterations=_MCTS_ITERS_BATCH)
 
     for i in range(n):
-        state = BattleState(team_a=factory_a(), team_b=factory_b())
+        ta, tb = factory_a(), factory_b()
+        sa = get_starter_idx(agent_a.strategy, ta) or 0
+        sb = get_starter_idx(agent_b.strategy, tb) or 0
+        state = BattleState(team_a=ta, team_b=tb, current_a=sa, current_b=sb)
         engine = BattleEngine(state, verbose=False)
         history = []
         winner = None
@@ -228,6 +235,172 @@ def run_batch(
 
 
 # ============================================================
+# 人机对战：动作选择 UI
+# ============================================================
+
+def _human_choose_action(engine: BattleEngine, state: BattleState, team: str) -> "Action":
+    """显示当前可用动作并等待人类玩家输入，返回所选 Action。"""
+    me       = state.get_current(team)
+    enemy_id = "b" if team == "a" else "a"
+    valid    = set(engine.get_actions(team))
+
+    # 展示对手队伍存活状态
+    opp_alive = [p for p in state.get_team(enemy_id) if not p.is_fainted]
+    my_alive  = [p for p in state.get_team(team)     if not p.is_fainted]
+    print(f"  我方存活({len(my_alive)}): {', '.join(p.name for p in my_alive)}")
+    print(f"  敌方存活({len(opp_alive)}): {', '.join(p.name for p in opp_alive)}")
+
+    # 印记信息
+    pos = state.get_positive_mark(team)
+    neg = state.get_negative_mark(team)
+    marks = []
+    if pos: marks.append(f"正面:{pos.mark_type.value}×{pos.stacks}")
+    if neg: marks.append(f"负面:{neg.mark_type.value}×{neg.stacks}")
+    if marks:
+        print(f"  印记: {', '.join(marks)}")
+
+    print(LINE)
+    print(f"  >> 选择动作  ·  {me.name}  能量:{me.energy}")
+
+    options: List[tuple] = []
+
+    # 技能列表
+    for i, skill in enumerate(me.skills):
+        action = (i,)
+        type_str = skill.skill_type.value
+        if skill.power > 0:
+            desc = f"威力{skill.power}  耗能{skill.energy_cost}"
+        else:
+            desc = f"变化  耗能{skill.energy_cost}"
+        if action in valid:
+            print(f"    {i+1}. {skill.name:<12} {type_str}系  {desc}")
+            options.append((str(i + 1), action))
+        else:
+            print(f"    {i+1}. {skill.name:<12} {type_str}系  {desc}  [不可用]")
+
+    # 聚能
+    if (-1,) in valid:
+        print(f"    g. 聚能  (当前能量 {me.energy}，+2)")
+        options.append(("g", (-1,)))
+
+    # 换宠
+    team_list = state.get_team(team)
+    cur_idx   = state.get_current_idx(team)
+    alive_others = [(j, p) for j, p in enumerate(team_list)
+                    if j != cur_idx and not p.is_fainted]
+    can_switch = [(-2, j) for j, _ in alive_others if (-2, j) in valid]
+    if can_switch:
+        print(f"    s. 换宠")
+        options.append(("s", None))
+
+    while True:
+        print(f"  输入 [1-4/g/s]：", end="", flush=True)
+        try:
+            raw = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            fallback = next((a for _, a in options if a is not None), (-1,))
+            return fallback
+
+        matched = False
+        for key, action in options:
+            if raw != key:
+                continue
+            matched = True
+            if key != "s":
+                return action
+
+            # 换宠子菜单
+            print(f"\n  选择换入精灵：")
+            sub: List[tuple] = []
+            for k, (j, p) in enumerate(alive_others, 1):
+                if (-2, j) in valid:
+                    hp_bar = _hp_bar(p.current_hp, p.hp, 8)
+                    print(f"    {k}. {p.name:<12} {hp_bar}  能量:{p.energy}")
+                    sub.append((str(k), (-2, j)))
+            print(f"    0. 取消")
+            while True:
+                print(f"  换宠序号：", end="", flush=True)
+                try:
+                    raw2 = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if raw2 == "0":
+                    break
+                for key2, sw_action in sub:
+                    if raw2 == key2:
+                        return sw_action
+                print(f"  [!] 无效序号")
+            break  # 换宠取消 → 重新选动作
+
+        if not matched:
+            print(f"  [!] 无效输入，请重新输入")
+
+
+# ============================================================
+# 人机对战主函数
+# ============================================================
+
+def run_human_vs_ai_battle(
+    team_human: List[Pokemon],
+    team_ai: List[Pokemon],
+    label_human: str = "你",
+    label_ai: str = "AI",
+) -> Optional[str]:
+    """
+    人机对战。人类操作 A 队，AI 操作 B 队。
+    返回胜者 "a"（人类）/ "b"（AI）/ None（平局/超时）。
+    """
+    agent_ai  = MCTSAgent("b", label_ai, iterations=_MCTS_ITERS_BATTLE)
+    starter_h = 0
+    starter_ai = get_starter_idx(agent_ai.strategy, team_ai) or 0
+
+    state  = BattleState(team_a=team_human, team_b=team_ai,
+                         current_a=starter_h, current_b=starter_ai)
+    engine = BattleEngine(state, verbose=True)
+
+    print(f"\n{SEP}")
+    print(f"  人机对战：{label_human}（你）A队  VS  {label_ai}（AI）B队")
+    print(f"  先锋: {team_human[starter_h].name}  vs  {team_ai[starter_ai].name}")
+    print(f"  提示：选技能 1-4 / g=聚能 / s=换宠")
+    print(SEP)
+
+    history = []
+    winner  = None
+
+    for _ in range(BattleEngine.MAX_TURNS):
+        winner = engine.check_winner()
+        if winner:
+            break
+
+        _print_field(state, label_human, label_ai)
+        human_action = _human_choose_action(engine, state, "a")
+
+        print(f"  AI 思考中...", end="", flush=True)
+        ai_action = agent_ai.choose_action(engine)
+        print(f"\r             \r", end="")
+
+        history.append((state.deep_copy(), human_action, ai_action))
+        engine.execute_turn(human_action, ai_action)
+
+    if not winner:
+        winner = engine.check_winner()
+
+    # 仅记录 AI 的经验（人类操作不计入学习）
+    agent_ai.experience_db.record_game(history, winner)
+    agent_ai.save()
+
+    tag = (f"{label_human} 赢！" if winner == "a"
+           else (f"{label_ai} 赢！" if winner == "b" else "平局/超时"))
+    print(f"\n{SEP}")
+    print(f"  结果：{tag}  (共 {state.turn} 回合)")
+    _print_team_summary(label_human, team_human)
+    _print_team_summary(label_ai, team_ai)
+    print(SEP)
+
+    return winner
+
+
+# ============================================================
 # 菜单：1. 开始对战
 # ============================================================
 def _menu_battle() -> None:
@@ -243,9 +416,22 @@ def _menu_battle() -> None:
     if name_b is None:
         return
 
+    print(f"\n  对战模式：")
+    print(f"  1. AI vs AI（双方自动对战，记录经验）")
+    print(f"  2. 人机对战（你操作 A 队 vs AI 操作 B 队）")
+    print(f"  0. 取消")
+    print(f"  选择 [0-2]：", end="")
+    mode = input().strip()
+
     team_a = build_team(name_a)
     team_b = build_team(name_b)
-    run_battle(team_a, team_b, name_a, name_b, verbose=True)
+
+    if mode == "1":
+        run_battle(team_a, team_b, name_a, name_b, verbose=True)
+    elif mode == "2":
+        run_human_vs_ai_battle(team_a, team_b, name_a, name_b)
+    else:
+        print("  已取消")
 
 
 # ============================================================
@@ -801,11 +987,12 @@ def main() -> None:
         print("  3. 管理队伍        （查看 / 删除 / 重命名）")
         print("  4. 批量模拟        （选两支队伍跑 N 场）")
         print("  5. 从图片导入队伍  （识别标准组队分享图）")
+        print("  6. PVP 自动挑战    （咔咔鸟脚本，控制游戏客户端）")
         print("  0. 返回")
         print(SEP)
 
         try:
-            choice = input("  选择 [0-5]: ").strip()
+            choice = input("  选择 [0-6]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n  再见！")
             break
@@ -822,8 +1009,10 @@ def main() -> None:
             _menu_batch()
         elif choice == "5":
             _menu_import_image()
+        elif choice == "6":
+            _menu_pvp()
         else:
-            print("  无效选择，请输入 0-5")
+            print("  无效选择，请输入 0-6")
             continue
 
         try:
@@ -832,5 +1021,70 @@ def main() -> None:
             break
 
 
+def _menu_pvp() -> None:
+    """PVP 自动战斗入口。"""
+    print(SEP)
+    print("  PVP 自动挑战 — 咔咔鸟 + 五随机")
+    print(SEP)
+    print("  使用前请确认：")
+    print("    1. 游戏客户端已启动（窗口标题：洛克王国：世界）")
+    print("    2. 在游戏内打开 PVP / 闪耀大赛界面，看到「开始挑战」按钮后启动脚本")
+    print("    3. assets/templates/pvp/switch_panel_heart.png 已截图放入")
+    print("    4. assets/templates/skills/ 下技能截图已放入")
+    print()
+
+    try:
+        n = input("  连续跑几场？（留空=1场）：").strip()
+        rounds = int(n) if n.isdigit() and int(n) > 0 else 1
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    try:
+        from game_control import GameController, SkillExecutor, find_window, setup_logger, GameWindowNotFoundError
+        from pvp.pvp_task import PvpTask
+        import win32gui
+        import pvp.config as pvp_cfg
+    except ImportError as e:
+        print(f"  [!] 导入失败：{e}")
+        print("  请确认 win_util / game_control 目录存在，依赖已安装（pip install loguru pywin32 opencv-python）")
+        return
+
+    setup_logger("INFO")
+
+    try:
+        hwnd = find_window()
+    except GameWindowNotFoundError as e:
+        print(f"  [!] {e}")
+        return
+
+    # 自动读取窗口尺寸：设置扫描区域 + 计算模板缩放比
+    _, _, win_w, win_h = win32gui.GetClientRect(hwnd)
+    pvp_cfg.LEFT_HALF = (0, 0, win_w // 2, win_h)
+    print(f"  游戏窗口：{win_w}×{win_h}，参考高度：{pvp_cfg.TEMPLATE_REFERENCE_HEIGHT}")
+
+    settings = {"similarity": 0.7}
+    ctrl = GameController(hwnd, settings)
+    ctrl.set_scale(pvp_cfg.TEMPLATE_REFERENCE_HEIGHT)   # 模板自动缩放
+    executor = SkillExecutor(ctrl)
+    task = PvpTask(ctrl, executor)
+
+    print(f"\n  开始自动战斗，共 {rounds} 场。按 Ctrl+C 随时中断。\n")
+    for i in range(1, rounds + 1):
+        print(f"  ── 第 {i}/{rounds} 场 ──")
+        try:
+            result = task.run()
+            print(f"  结果: {result}")
+        except KeyboardInterrupt:
+            print("\n  已中断")
+            break
+        except Exception as e:
+            print(f"  [!] 出错：{e}")
+            break
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--pvp" in sys.argv:
+        _menu_pvp()
+    else:
+        main()
