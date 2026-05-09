@@ -679,4 +679,4 @@ rocom-data/
 
 战斗引擎（`sim/` 目录）基于 [NRC_SIM](https://github.com/AofeiLi-code/NRC_SIM)，遵循 MIT License。
 
-闪耀大赛自动挑战就与[roco-kingdom-world-sript](https://github.com/JhonTitor6/roco-kingdom-world-script.git)， 遵循MIT License.
+闪耀大赛自动挑战功能（`pvp/` 目录）基于[roco-kingdom-world-sript](https://github.com/JhonTitor6/roco-kingdom-world-script.git)， 遵循 MIT License.
