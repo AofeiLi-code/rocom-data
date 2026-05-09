@@ -47,6 +47,8 @@ class BattleEngine:
         self.state = state
         self.verbose = verbose
         self.log: List[str] = []
+        self.label_a: str = "A队"  # A队显示标签
+        self.label_b: str = "B队"  # B队显示标签
         # 为初始出战精灵设置入场回合（仅回合1且未设置时）
         _ability_hooks.on_battle_start(state, self)
 
@@ -240,9 +242,15 @@ class BattleEngine:
 
         # ---- 换人 ----
         if action[0] == -2:
-            self._apply_switch(team, action[1])
-            new_p = team_list[action[1]]
-            self._log(f"[{team.upper()}] {current.name} 换人 → {new_p.name} (HP:{new_p.current_hp}/{new_p.hp} 能量:{new_p.energy})")
+            target_idx = action[1]
+            current_idx = self.state.get_current_idx(team)
+            if target_idx == current_idx:
+                self._log(f"[{team.upper()}] {current.name} 已在前台，无效换人")
+                return
+            self._apply_switch(team, target_idx)
+            new_p = team_list[target_idx]
+            ab_tag = f" [{new_p.ability}]" if new_p.ability else ""
+            self._log(f"[{team.upper()}] {current.name} 换人 → {new_p.name}{ab_tag} (HP:{new_p.current_hp}/{new_p.hp} 能量:{new_p.energy})")
             return
 
         # ---- 汇合聚能 ----
@@ -533,8 +541,12 @@ class BattleEngine:
             user.gain_energy(skill.self_heal_energy)
 
     def _apply_switch(self, team: str, target_idx: int) -> None:
-        """换人（触发换出/换入特性）"""
+        """换人（触发换出/换入特性，切出时清除非印记负面效果）"""
         old_idx = self.state.get_current_idx(team)
+        # 切出精灵：清除非印记状态（中毒、灼烧、冻结、寄生）
+        outgoing = self.state.get_team(team)[old_idx]
+        if not outgoing.is_fainted:
+            outgoing.clear_debuffs()
         _ability_hooks.on_switch_out(self.state, self, team, old_idx, target_idx)
         self.state.set_current_idx(team, target_idx)
         _ability_hooks.on_switch_in(self.state, self, team, target_idx)
@@ -597,9 +609,15 @@ class BattleEngine:
                 self._log(f"  天气 {self.state.weather.value} 消散了")
                 self.state.weather = Weather.NONE
 
-        # --- 2-5. 异常状态处理（所有精灵，包括后备） ---
-        all_pokemon = self.state.team_a + self.state.team_b
-        for p in all_pokemon:
+        # --- 2-5. 异常状态处理（仅场上精灵，非印记效果切出即清除） ---
+        for team_key in ("team_a", "team_b"):
+            team_list = getattr(self.state, team_key)
+        # --- 2-5. 异常状态处理（仅场上精灵，非印记效果切出即清除） ---
+        for team_key in ("team_a", "team_b"):
+            team_list = getattr(self.state, team_key)
+            current_idx = self.state.get_current_idx("a" if team_key == "team_a" else "b")
+            p = team_list[current_idx]
+
             if p.is_fainted:
                 continue
 
@@ -640,7 +658,6 @@ class BattleEngine:
                     # 寄生者在场则回复
                     parasite_owner = self._find_pokemon_by_name(p.parasited_by)
                     if parasite_owner and not parasite_owner.is_fainted:
-                        # 检查寄生者是否是当前出战精灵
                         is_on_field = self._is_on_field(parasite_owner)
                         if is_on_field:
                             healed = parasite_owner.heal(actual)
@@ -657,8 +674,8 @@ class BattleEngine:
                     p.current_hp = 0
                     p.status = StatusType.FAINTED
 
-        # --- 6. 冷却递减 ---
-        for p in all_pokemon:
+        # --- 6. 冷却递减（所有精灵） ---
+        for p in self.state.team_a + self.state.team_b:
             expired = []
             for k, v in p.cooldowns.items():
                 if v > 0:
@@ -667,8 +684,9 @@ class BattleEngine:
                     expired.append(k)
             for k in expired:
                 del p.cooldowns[k]
-            for k in expired:
-                del p.cooldowns[k]
+            # 清理已过期但未被删除的（避免重复删除）
+            for k in list(expired):
+                p.cooldowns.pop(k, None)
 
         # --- 7. 回合结束特性效果（蚀刻转化 / 特殊清洁场景 / 印记伤害） ---
         _ability_hooks.on_turn_end(self.state, self)

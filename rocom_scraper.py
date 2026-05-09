@@ -3,6 +3,9 @@
 目标: https://wiki.biligame.com/rocom/精灵图鉴
 输出: data/sprites.json  (精灵基础数据 + 技能 + 克制关系)
       data/sprites.csv   (同上，CSV 格式，技能列用分号拼接)
+      data/skills.csv    (全技能去重列表)
+      data/urls.csv      (图片URL列表，边爬边更新)
+      data/images/       (下载的图片，按类型分子目录)
 
 使用方法:
     pip install requests beautifulsoup4
@@ -21,6 +24,7 @@ import time
 import random
 import argparse
 import os
+import shutil
 from pathlib import Path
 from urllib.parse import urljoin, unquote
 
@@ -29,6 +33,7 @@ from bs4 import BeautifulSoup
 
 BASE_URL = "https://wiki.biligame.com"
 LIST_URL = "https://wiki.biligame.com/rocom/%E7%B2%BE%E7%81%B5%E5%9B%BE%E9%89%B4"
+AVATAR_LIST_URL = "https://wiki.biligame.com/rocom/%E4%B8%8A%E4%BC%A0%E9%98%B5%E5%AE%B9"
 
 HEADERS = {
     "User-Agent": (
@@ -47,6 +52,70 @@ _DELAY_MAX = 3.0
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
+
+# ── URL 收集 & 图片下载 ────────────────────────────────────────────────────────
+
+# 图片类型 -> 子目录名
+IMAGE_DIRS = {
+    "sprite":    "images/sprites",    # 精灵立绘
+    "attribute": "images/attributes", # 属性图标
+    "skill":     "images/skills",     # 技能图标
+    "ability":   "images/abilities",  # 特性图标
+    "matchup":   "images/matchup",    # 克制表属性图标
+    "avatar":    "images/avatars",    # 上传阵容头像
+}
+
+_urls_cache: dict[str, dict] = {}   # url -> row, 去重用
+_urls_path: Path | None = None
+
+URL_COLUMNS = ["name", "type", "url", "local_path"]
+
+
+def _init_urls(out_path: Path):
+    global _urls_path, _urls_cache
+    _urls_path = out_path.parent / "urls.csv"
+    _urls_cache = {}
+    if _urls_path.exists():
+        with open(_urls_path, encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                _urls_cache[row["url"]] = row
+
+
+def _add_url(name: str, img_type: str, url: str, data_dir: Path, force: bool = False) -> str:
+    """记录一条图片URL，若未下载则立即下载，返回本地相对路径。"""
+    if url in _urls_cache and not force:
+        return _urls_cache[url]["local_path"]
+
+    subdir = data_dir / IMAGE_DIRS[img_type]
+    subdir.mkdir(parents=True, exist_ok=True)
+
+    ext = url.split(".")[-1].split("?")[0] or "png"
+    safe_name = re.sub(r'[\\/:*?"<>|]', "_", name)
+    local_path = f"{IMAGE_DIRS[img_type]}/{safe_name}.{ext}"
+    abs_path = data_dir / local_path
+
+    if not abs_path.exists():
+        try:
+            r = SESSION.get(url, timeout=15)
+            r.raise_for_status()
+            abs_path.write_bytes(r.content)
+        except Exception as e:
+            print(f"\n  [!] 图片下载失败 {url}: {e}")
+            local_path = ""
+
+    row = {"name": name, "type": img_type, "url": url, "local_path": local_path}
+    _urls_cache[url] = row
+    _flush_urls()
+    return local_path
+
+
+def _flush_urls():
+    if _urls_path is None:
+        return
+    with open(_urls_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=URL_COLUMNS)
+        writer.writeheader()
+        writer.writerows(_urls_cache.values())
 
 
 # ── 进度条 ────────────────────────────────────────────────────────────────────
@@ -102,7 +171,127 @@ def img_alt_to_attr(alt: str) -> str:
     return m.group(1) if m else alt.strip()
 
 
+def fetch_text(url: str, retries: int = 3) -> str:
+    """Fetch a page and return response text with the same retry behavior as fetch()."""
+    retry_waits = [10, 20, 30]
+
+    for attempt in range(retries):
+        try:
+            resp = SESSION.get(url, timeout=15)
+            if resp.status_code == 567:
+                wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+                print(f"\n  [!] 触发反爬限制 (567)，等待 {wait}s 后重试"
+                      f"({attempt+1}/{retries})...")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.text
+        except requests.HTTPError as e:
+            wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+            print(f"\n  [!] HTTP 错误 ({attempt+1}/{retries}): {e}，等待 {wait}s...")
+            time.sleep(wait)
+        except requests.RequestException as e:
+            wait = retry_waits[min(attempt, len(retry_waits) - 1)]
+            print(f"\n  [!] 请求失败 ({attempt+1}/{retries}): {e}，等待 {wait}s...")
+            time.sleep(wait)
+
+    raise RuntimeError(f"无法抓取（已重试 {retries} 次）: {url}")
+
+
+def extract_avatar_name(raw: str) -> str:
+    """Extract a sprite name from upload-lineup avatar alt/title text."""
+    text = (raw or "").strip()
+    match = re.fullmatch(r"link=(.+?)\}\}", text)
+    if match:
+        return match.group(1).strip()
+    if text.startswith("link="):
+        text = text[len("link="):]
+    return text.removesuffix("}}").strip()
+
+
+def _to_optional_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def parse_avatar_list_html(html: str) -> list[dict]:
+    """Parse upload-lineup page HTML and return avatar image records."""
+    soup = BeautifulSoup(html, "html.parser")
+    avatars: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for list_node in soup.find_all("div", class_="rocom_spirit_popup_overlay_list"):
+        for box in list_node.find_all("div", class_="rocom_canlearn_img_box"):
+            img = box.find("img")
+            if not img:
+                continue
+            url = (img.get("src") or "").strip()
+            if not url:
+                continue
+            name = extract_avatar_name(img.get("alt") or img.get("title") or "")
+            if not name:
+                continue
+            key = (name, url)
+            if key in seen:
+                continue
+            seen.add(key)
+            avatars.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "primary_type": (box.get("data-main") or "").strip(),
+                    "secondary_type": (box.get("data-2") or "").strip(),
+                    "width": _to_optional_int(img.get("data-file-width")),
+                    "height": _to_optional_int(img.get("data-file-height")),
+                }
+            )
+
+    return avatars
+
+
+def parse_avatar_list_page(url: str = AVATAR_LIST_URL) -> list[dict]:
+    """Fetch and parse the upload-lineup avatar list page."""
+    print(f"[*] 抓取头像列表页: {url}")
+    return parse_avatar_list_html(fetch_text(url))
+
+
 # ── 列表页解析 ────────────────────────────────────────────────────────────────
+
+def download_avatar_images(data_dir: Path, force: bool = False) -> dict:
+    if _urls_path is None:
+        _init_urls(data_dir / "sprites.json")
+
+    avatars = parse_avatar_list_page()
+    if not avatars:
+        raise RuntimeError("avatar list not found")
+
+    stats = {
+        "total": len(avatars),
+        "saved": 0,
+        "failed": 0,
+        "failed_urls": [],
+    }
+
+    total = len(avatars)
+    for index, avatar in enumerate(avatars, 1):
+        print_progress(index, total, avatar["name"])
+        local_path = _add_url(avatar["name"], "avatar", avatar["url"], data_dir, force)
+        if local_path:
+            stats["saved"] += 1
+        else:
+            stats["failed"] += 1
+            stats["failed_urls"].append(avatar["url"])
+
+    print(
+        f"[完成] 头像: 总数 {stats['total']}, "
+        f"保存 {stats['saved']}, 失败 {stats['failed']}"
+    )
+    return stats
+
 
 def parse_list_page() -> list[dict]:
     """解析精灵图鉴列表页, 返回 [{no, name, form, url, has_shiny}, ...]"""
@@ -111,30 +300,29 @@ def parse_list_page() -> list[dict]:
 
     entries = []
     content = soup.find("div", id="mw-content-text") or soup
-    for card in content.select("div.rocom_prop_img"):
-        # NO编号
-        no_span = card.find("span", style=re.compile(r'font-size:10px'))
-        if not no_span:
+    # 每个精灵是 <a href="/rocom/NAME"><span>NO.xxx</span>...</a>
+    for a in content.find_all("a", href=re.compile(r'^/rocom/')):
+        span = a.find("span", string=re.compile(r'^NO\.\d+'))
+        if not span:
             continue
-        no_m = re.search(r'NO\.(\d+)', no_span.get_text())
+        no_m = re.search(r'NO\.(\d+)', span.get_text())
         if not no_m:
             continue
         no = int(no_m.group(1))
 
-        # 主链接
-        a = card.find("a", href=re.compile(r'^/rocom/'))
-        if not a:
-            continue
         href = a["href"]
         url = urljoin(BASE_URL, href)
+        name_raw = unquote(href.split("/rocom/")[-1])
 
-        # 名字从 block_2，形态从 block_3
-        name_p = card.find("p", class_="block_2")
-        name = name_p.get_text(strip=True) if name_p else unquote(href.split("/rocom/")[-1])
-        form_p = card.find("p", class_="block_3")
-        form = form_p.get_text(strip=True) or None if form_p else None
+        form_m = re.match(r'^(.+?)（(.+)）$', name_raw)
+        if form_m:
+            name = form_m.group(1)
+            form = form_m.group(2)
+        else:
+            name = name_raw
+            form = None
 
-        has_shiny = "异色" in card.get_text()
+        has_shiny = "异色" in a.get_text()
 
         entries.append({
             "no": no,
@@ -229,77 +417,112 @@ def parse_type_matchup(soup: BeautifulSoup) -> dict:
     return matchup
 
 
-def parse_skills(soup: BeautifulSoup) -> list[dict]:
-    """解析技能列表"""
+def parse_skills(soup: BeautifulSoup, data_dir: Path | None = None, force: bool = False) -> list[dict]:
+    """解析技能列表，含等级要求和图标URL"""
     skills = []
-    # 每个技能块包含: 属性图标, 技能名, 星数(能量消耗), 类别, 威力, 描述
-    # 结构: 技能区域在克制表之后
-
-    # 找所有包含技能信息的行
-    # 技能的特征: 有"图标 技能 星星背景"图片 (能量消耗标识)
     skill_cost_imgs = soup.find_all("img", alt=re.compile(r'图标 技能 星星背景'))
-    
+
     for cost_img in skill_cost_imgs:
         try:
-            # 向上找技能容器块
+            # 向上找技能容器块 (rocom_sprite_skill_box)
             container = cost_img.find_parent()
-            for _ in range(5):  # 最多向上找5层
+            for _ in range(6):
+                if container and container.get("class") and "rocom_sprite_skill_box" in container.get("class", []):
+                    break
                 if container and container.find("img", alt=re.compile(r'图标 宠物 属性')):
                     break
                 container = container.find_parent() if container else None
             if not container:
                 continue
 
-            # 属性
-            attr_img = container.find("img", alt=re.compile(r'图标 宠物 属性'))
+            # 等级要求: rocom_sprite_skill_level div
+            level = 0
+            level_div = container.find(class_="rocom_sprite_skill_level")
+            if level_div:
+                lv_m = re.search(r'LV\s*(\d+)', level_div.get_text())
+                if lv_m:
+                    level = int(lv_m.group(1))
+
+            # 属性图标
+            attr_img = container.find("img", class_="rocom_sprite_skill_attr")
+            if not attr_img:
+                attr_img = container.find("img", alt=re.compile(r'图标 宠物 属性'))
             skill_attr = img_alt_to_attr(attr_img.get("alt", "")) if attr_img else "未知"
 
-            # 技能名 (通常是第一个非图标的文本或img alt)
-            # 技能图标 alt 格式: "技能图标 技能名.png"
+            # 技能图标 & 名称
             skill_icon = container.find("img", alt=re.compile(r'^技能图标'))
             if skill_icon:
                 skill_name = skill_icon.get("alt", "").replace("技能图标 ", "").replace(".png", "")
+                skill_icon_url = skill_icon.get("src", "")
             else:
                 skill_name = ""
+                skill_icon_url = ""
 
-            # 能量消耗 (星数): cost_img 后的第一个数字文本
+            # 属性图标URL (取原图，不用缩略图)
+            attr_icon_url = ""
+            if attr_img:
+                src = attr_img.get("src", "")
+                # 从 srcset 取最大分辨率，或直接用 src
+                srcset = attr_img.get("srcset", "")
+                if srcset:
+                    parts = [p.strip().split(" ")[0] for p in srcset.split(",") if p.strip()]
+                    attr_icon_url = parts[-1] if parts else src
+                else:
+                    attr_icon_url = src
+
+            # 能量消耗
             cost_text = cost_img.find_next_sibling(string=True)
             cost = int(cost_text.strip()) if cost_text and cost_text.strip().isdigit() else 0
 
-            # 类别 (物攻/魔攻/状态/防御)
+            # 类别
             category_img = container.find("img", alt=re.compile(r'图标 技能 类别'))
             if category_img:
-                cat_alt = category_img.get("alt", "")
-                cat_m = re.search(r'类别\s+(\S+?)(?:\.png)?$', cat_alt)
+                cat_m = re.search(r'类别\s+(\S+?)(?:\.png)?$', category_img.get("alt", ""))
                 category = cat_m.group(1) if cat_m else ""
             else:
                 category = ""
 
-            # 威力: 类别图后的数字
+            # 威力
             power = 0
-            if category_img:
-                sib = category_img.find_next_sibling(string=True)
-                if sib and sib.strip().lstrip('-').isdigit():
-                    power = int(sib.strip())
+            power_div = container.find(class_="rocom_sprite_skill_power")
+            if power_div:
+                pt = power_div.get_text(strip=True)
+                if pt.lstrip('-').isdigit():
+                    power = int(pt)
 
-            # 描述: ✦ 开头的文本
+            # 描述
             full_text = container.get_text(" ", strip=True)
             desc_m = re.search(r'✦(.+?)(?:$)', full_text)
             description = desc_m.group(1).strip() if desc_m else ""
 
-            if skill_name:
-                skills.append({
-                    "name": skill_name,
-                    "attribute": skill_attr,
-                    "category": category,
-                    "cost": cost,
-                    "power": power,
-                    "description": description,
-                })
+            if not skill_name:
+                continue
+
+            # 下载图标
+            if data_dir and skill_icon_url:
+                _add_url(skill_name, "skill", skill_icon_url, data_dir, force)
+            if data_dir and attr_icon_url:
+                _add_url(skill_attr, "attribute", attr_icon_url, data_dir, force)
+
+            skills.append({
+                "name": skill_name,
+                "attribute": skill_attr,
+                "category": category,
+                "cost": cost,
+                "power": power,
+                "level": level,
+                "description": description,
+            })
         except Exception:
             continue
 
-    return skills
+    seen = set()
+    deduped = []
+    for sk in skills:
+        if sk["name"] not in seen:
+            seen.add(sk["name"])
+            deduped.append(sk)
+    return deduped
 
 
 def parse_attributes_from_detail(soup: BeautifulSoup) -> list[str]:
@@ -330,7 +553,6 @@ def parse_evolution_chain(soup: BeautifulSoup) -> list[dict] | None:
     if not box:
         return None
 
-    # 收集各阶段精灵
     stages = []
     for i in range(1, 4):
         div = box.find("div", class_=f"rocom_spirit_evolution_{i}")
@@ -347,14 +569,12 @@ def parse_evolution_chain(soup: BeautifulSoup) -> list[dict] | None:
     if len(stages) <= 1:
         return None
 
-    # 进化等级：在 evolution_1 和 evolution_2 之间，evolution_2 和 evolution_3 之间
     level_divs = box.find_all("div", class_="rocom_spirit_evolution_level")
     levels = []
     for ld in level_divs:
         p = ld.find("p", class_="rocom_spirit_evolution_level_num")
         levels.append(p.get_text(strip=True) if p else None)
 
-    # 进化条件（整个 rightBox 范围内）
     rightbox = soup.find("div", class_="rocom_sprite_temp_evolve_rightBox")
     condition = None
     if rightbox:
@@ -362,7 +582,6 @@ def parse_evolution_chain(soup: BeautifulSoup) -> list[dict] | None:
         if cond_p:
             condition = cond_p.get_text(strip=True)
 
-    # 组装：每个非首阶段附上进化到它的等级/条件
     result = [{"name": stages[0]["name"], "no": None, "evolves_from": None, "level": None, "condition": None}]
     for i, stage in enumerate(stages[1:]):
         level = levels[i] if i < len(levels) else None
@@ -372,21 +591,17 @@ def parse_evolution_chain(soup: BeautifulSoup) -> list[dict] | None:
     return result
 
 
-def parse_sprite_detail(entry: dict) -> dict:
+def parse_sprite_detail(entry: dict, data_dir: Path | None = None, force: bool = False) -> dict:
     """爬取并解析单个精灵的详情页"""
     soup = fetch(entry["url"])
     content = soup.find("div", id="mw-content-text") or soup
 
-    # 种族值
     stats = parse_stat_block(content)
 
-    # 属性 (从页面顶部的属性图标)
-    # 简单方式: 找页面title区域附近的属性图
+    # 属性图标 (h1 之后前几个)
     attrs = []
-    # 在 h1 标题附近找属性
     h1 = soup.find("h1")
     if h1:
-        # 找h1之后的前几个属性图标
         for img in h1.find_all_next("img", limit=10):
             alt = img.get("alt", "")
             if "图标 宠物 属性" in alt:
@@ -397,28 +612,52 @@ def parse_sprite_detail(entry: dict) -> dict:
                 break
 
     # 特性
-    ability_section = content.find(string=re.compile(r'^特性$'))
     ability = None
+    ability_section = content.find(string=re.compile(r'^特性$'))
     if ability_section:
         p = ability_section.find_parent()
         if p:
-            # 找特性图片的alt作为名字
             nxt = p.find_next("img", alt=re.compile(r'^(?!图标|界面|页面)'))
             if nxt:
                 ability_name = nxt.get("alt", "").replace(".png", "")
-                # 特性描述: 该图片后的文字
                 desc_node = nxt.find_next(string=re.compile(r'.{5,}'))
                 ability_desc = desc_node.strip() if desc_node else ""
+                ability_icon_url = nxt.get("src", "")
+                if data_dir and ability_icon_url and ability_name:
+                    _add_url(ability_name, "ability", ability_icon_url, data_dir, force)
                 ability = {"name": ability_name, "description": ability_desc}
 
-    # 克制关系
-    matchup = parse_type_matchup(content)
+    # 精灵立绘 (rocom_sprite_grament_img 内第一个可见 img)
+    if data_dir:
+        grament_div = content.find("div", class_="rocom_sprite_grament_img")
+        if grament_div:
+            sprite_img = grament_div.find("img")
+            if sprite_img:
+                sprite_url = sprite_img.get("src", "")
+                sprite_label = f"{entry['name']}{'_'+entry['form'] if entry.get('form') else ''}"
+                if sprite_url:
+                    _add_url(sprite_label, "sprite", sprite_url, data_dir, force)
+
+        # 克制表属性图标
+        matchup_section = content.find(string=re.compile(r'^克制$'))
+        if matchup_section:
+            matchup_container = matchup_section.find_parent()
+            if matchup_container:
+                outer = matchup_container.find_parent()
+                if outer:
+                    for img in outer.find_all("img"):
+                        alt = img.get("alt", "")
+                        if "属性" in alt:
+                            attr_name = img_alt_to_attr(alt)
+                            src = img.get("src", "")
+                            if src and attr_name:
+                                _add_url(attr_name, "matchup", src, data_dir, force)
 
     # 进化链
     evolution_chain = parse_evolution_chain(content)
 
-    # 技能
-    skills = parse_skills(content)
+    matchup = parse_type_matchup(content)
+    skills = parse_skills(content, data_dir, force)
 
     return {
         **entry,
@@ -431,114 +670,61 @@ def parse_sprite_detail(entry: dict) -> dict:
     }
 
 
-# ── 检查更新 ──────────────────────────────────────────────────────────────────
-
-def check_update(out_path: Path, delay: float = 1.5):
-    """对比本地数据与 wiki 列表，按需增量爬取"""
-    if not out_path.exists():
-        print("[!] 本地数据不存在，请先执行全量爬取")
-        return
-
-    with open(out_path, encoding="utf-8") as f:
-        local_data = json.load(f)
-
-    local_keys = {(d["no"], d["name"], d.get("form")) for d in local_data}
-    print(f"[*] 本地共有 {len(local_data)} 条记录")
-    print(f"[*] 正在获取 wiki 精灵列表...")
-
-    try:
-        wiki_entries = parse_list_page()
-    except RuntimeError as e:
-        print(f"\n[!] 无法连接 wiki: {e}")
-        print("[!] 可能是网络问题或服务器限速，请稍后重试")
-        return
-    wiki_map = {(e["no"], e["name"], e.get("form")): e for e in wiki_entries}
-
-    new_keys = sorted(set(wiki_map) - local_keys, key=lambda x: (x[0], x[1], x[2] or ""))
-
-    if not new_keys:
-        print("\n[✓] 数据已是最新版本，无需更新")
-        print("    3 秒后自动关闭...")
-        time.sleep(3)
-        return
-
-    print(f"\n[+] 发现 {len(new_keys)} 条新精灵:")
-    for no, name, form in new_keys:
-        form_str = f"（{form}）" if form else ""
-        print(f"    NO.{no:03d} {name}{form_str}")
-
-    print()
-    answer = input(f"是否爬取这 {len(new_keys)} 条新数据？[Y/n]: ").strip().lower()
-    if answer not in ("", "y", "yes"):
-        print("已取消")
-        return
-
-    new_entries = [wiki_map[k] for k in new_keys]
-    results = list(local_data)
-    failed = []
-
-    print()
-    for i, entry in enumerate(new_entries, 1):
-        name_display = f"{entry['name']}{'（'+entry['form']+'）' if entry['form'] else ''}"
-        print_progress(i, len(new_entries), f"NO.{entry['no']:03d} {name_display}")
-        try:
-            data = parse_sprite_detail(entry)
-            results.append(data)
-        except Exception as e:
-            print(f"\n  [!] 失败: {e}")
-            failed.append(entry["url"])
-        time.sleep(random.uniform(delay, delay + 1.5))
-
-    _save(results, out_path)
-    csv_path = out_path.with_suffix(".csv")
-    _save_csv(results, csv_path)
-
-    print(f"\n[完成] 已更新，本地共 {len(results)} 条，本次失败 {len(failed)} 条")
-    if failed:
-        fail_path = out_path.with_name("failed_urls.txt")
-        fail_path.write_text("\n".join(failed))
-        print(f"[完成] 失败URL已记录至: {fail_path}")
-
-
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
-def main():
-    parser = argparse.ArgumentParser(description="洛克王国精灵数据爬虫")
-    parser.add_argument("--limit", type=int, default=0, help="只爬前N只 (0=全部)")
-    parser.add_argument("--delay", type=float, default=1.5,
-                        help="请求间隔下限(秒)，实际为 delay~(delay+1.5) 随机值，默认 1.5")
-    parser.add_argument("--output", default="data/sprites.json", help="输出路径")
-    parser.add_argument("--check-update", action="store_true", help="检查并增量更新数据")
-    args = parser.parse_args()
+def _write_failed_urls(path: Path, failed_urls: list[str]) -> None:
+    if not failed_urls:
+        return
+    path.write_text("\n".join(failed_urls), encoding="utf-8")
 
+
+def run_sprite_scraper(args) -> int:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = out_path.parent
 
-    if args.check_update:
-        check_update(out_path, delay=args.delay)
-        return
+    _init_urls(out_path)
 
-    # 1. 获取精灵列表
+    if args.force:
+        for p in [data_dir / "skills.csv", data_dir / "urls.csv"]:
+            if p.exists():
+                p.unlink()
+        _urls_cache.clear()
+
+    existing: dict[tuple, dict] = {}
+    if out_path.exists() and not args.force:
+        with open(out_path, encoding="utf-8") as f:
+            for d in json.load(f):
+                existing[(d["no"], d["name"], d.get("form"))] = d
+
     try:
         entries = parse_list_page()
     except RuntimeError as e:
         print(f"\n[!] 无法连接 wiki: {e}")
         print("[!] 可能是网络问题或服务器限速，请稍后重试")
-        return
+        return 1
+
     if args.limit > 0:
         entries = entries[:args.limit]
         print(f"[*] 限制模式: 只处理前 {args.limit} 只")
 
-    # 2. 逐一爬取详情
     results = []
     failed = []
+    skipped = 0
 
     for i, entry in enumerate(entries, 1):
-        name_display = f"{entry['name']}{'（'+entry['form']+'）' if entry['form'] else ''}"
+        key = (entry["no"], entry["name"], entry.get("form"))
+        form = entry.get("form")
+        name_display = f"{entry['name']}（{form}）" if form else entry["name"]
         print_progress(i, len(entries), f"NO.{entry['no']:03d} {name_display}")
 
+        if key in existing:
+            results.append(existing[key])
+            skipped += 1
+            continue
+
         try:
-            data = parse_sprite_detail(entry)
+            data = parse_sprite_detail(entry, data_dir, args.force)
             results.append(data)
             if i % 10 == 0:
                 _save(results, out_path)
@@ -548,22 +734,72 @@ def main():
 
         time.sleep(random.uniform(args.delay, args.delay + 1.5))
 
-    # 3. 回填进化链 id（名字 → no）
     _backfill_evolution_ids(results)
-
-    # 4. 最终保存
     _save(results, out_path)
     csv_path = out_path.with_suffix(".csv")
     _save_csv(results, csv_path)
+    _save_skills_csv(results, data_dir / "skills.csv")
 
-    print(f"\n[完成] 成功: {len(results)}, 失败: {len(failed)}")
+    avatar_failed = []
+    if not getattr(args, "skip_avatars", False):
+        try:
+            avatar_stats = download_avatar_images(data_dir, args.force)
+            avatar_failed = avatar_stats.get("failed_urls", [])
+        except RuntimeError as exc:
+            print(f"\n[!] 头像同步失败: {exc}")
+
+    all_failed = failed + avatar_failed
+
+    print(f"\n[完成] 成功: {len(results)-skipped}, 跳过: {skipped}, 失败: {len(failed)}")
     print(f"[完成] JSON 已保存至: {out_path.resolve()}")
     print(f"[完成] CSV  已保存至: {csv_path.resolve()}")
+    print(f"[完成] 技能 已保存至: {(data_dir / 'skills.csv').resolve()}")
+    print(f"[完成] URLs 已保存至: {(data_dir / 'urls.csv').resolve()}")
 
-    if failed:
+    if all_failed:
         fail_path = out_path.with_name("failed_urls.txt")
-        fail_path.write_text("\n".join(failed))
+        _write_failed_urls(fail_path, all_failed)
         print(f"[完成] 失败URL已记录至: {fail_path}")
+
+    return 0
+
+
+def run_avatar_scraper(output: Path, force: bool) -> int:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    data_dir = output.parent
+    _init_urls(output)
+
+    try:
+        stats = download_avatar_images(data_dir, force)
+    except RuntimeError as exc:
+        print(f"\n[!] 头像同步失败: {exc}")
+        return 1
+
+    failed_urls = stats.get("failed_urls", [])
+    if failed_urls:
+        fail_path = output.with_name("failed_urls.txt")
+        _write_failed_urls(fail_path, failed_urls)
+        print(f"[完成] 失败URL已记录至: {fail_path}")
+
+    print(f"[完成] URLs 已保存至: {(data_dir / 'urls.csv').resolve()}")
+    return 1 if failed_urls else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="洛克王国精灵数据爬虫")
+    parser.add_argument("--limit", type=int, default=0, help="只爬前N只 (0=全部)")
+    parser.add_argument("--delay", type=float, default=1.5,
+                        help="请求间隔下限(秒)，实际为 delay~(delay+1.5) 随机值，默认 1.5")
+    parser.add_argument("--output", default="data/sprites.json", help="输出路径")
+    parser.add_argument("--force", action="store_true", help="强制重爬当前运行范围内的数据和图片")
+    parser.add_argument("--skip-avatars", action="store_true", help="跳过上传阵容头像同步")
+    parser.add_argument("--avatars-only", action="store_true", help="只同步上传阵容页精灵头像")
+    args = parser.parse_args()
+
+    out_path = Path(args.output)
+    if args.avatars_only:
+        raise SystemExit(run_avatar_scraper(out_path, args.force))
+    raise SystemExit(run_sprite_scraper(args))
 
 
 def _backfill_evolution_ids(results: list):
@@ -581,12 +817,36 @@ def _backfill_evolution_ids(results: list):
 
 
 def _save(data: list, path: Path):
-    # 写入前先备份原文件
     if path.exists():
-        import shutil
         shutil.copy2(path, path.with_suffix(".backup.json"))
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+SKILLS_CSV_COLUMNS = ["技能名", "属性", "类型", "威力", "耗能", "效果描述"]
+
+
+def _save_skills_csv(data: list, path: Path):
+    seen = set()
+    rows = []
+    for sprite in data:
+        for sk in (sprite.get("skills") or []):
+            name = sk.get("name", "")
+            if name and name not in seen:
+                seen.add(name)
+                rows.append({
+                    "技能名": name,
+                    "属性":   sk.get("attribute", ""),
+                    "类型":   sk.get("category", ""),
+                    "威力":   sk.get("power", ""),
+                    "耗能":   sk.get("cost", ""),
+                    "效果描述": sk.get("description", ""),
+                })
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=SKILLS_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
 
 
 CSV_COLUMNS = [
@@ -608,6 +868,7 @@ def _sprite_to_csv_row(d: dict) -> dict:
     def skill_str(s: dict) -> str:
         return (
             f"{s.get('name', '')}("
+            f"LV{s.get('level', 0)}/"
             f"{s.get('attribute', '')}/"
             f"{s.get('category', '')}/"
             f"{s.get('power', '')}/"
@@ -645,7 +906,6 @@ def _sprite_to_csv_row(d: dict) -> dict:
 
 def _save_csv(data: list, path: Path):
     if path.exists():
-        import shutil
         shutil.copy2(path, path.with_suffix(".backup.csv"))
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)

@@ -1,0 +1,15 @@
+# 大模型配置 — LLM Agent 使用此文件连接外部 API
+#
+# endpoint: OpenAI 兼容的 API 端点（不含 /v1/chat/completions）
+# model:    模型名称
+# api_key:  API key
+# temperature: 温度参数（越低越确定，0.2~0.7 适合对战决策）
+# timeout:   HTTP 请求超时秒数（生成队伍/策略时 prompt 较长，需更大值）
+#
+# 经验文档存储在 data/llm_experience/<team_name>.json
+
+endpoint: "http://xxxxx:1234/v1"
+model: "qwopus3.6-27b-v1-preview"
+api_key: "localapi"
+temperature: 0.3
+timeout: 120

@@ -10,6 +10,10 @@
 
 HP 段：0=低危(≤25%), 1=中低(≤50%), 2=中高(≤75%), 3=满(>75%)
 能量段：0=低(0-3), 1=中(4-6), 2=高(7-10)
+
+数据后端：
+  - 数据库（MariaDB）— 通过.env配置启用，支持并发写入
+  - JSON文件 — 默认方式，向后兼容
 """
 
 import json
@@ -117,6 +121,8 @@ class ExperienceDB:
 
     # 保存
     db.save("毒队")
+    
+    数据后端自动根据.env配置选择数据库或JSON文件。
     """
 
     def __init__(self):
@@ -125,6 +131,18 @@ class ExperienceDB:
             "a": {}, "b": {}
         }
         self.total_games: int = 0
+        # 标记哪些记录被修改过（用于增量保存）
+        self._dirty_keys: set = set()  # {(team, state_key, action_key)}
+    
+    @property
+    def _use_db(self) -> bool:
+        """是否使用数据库后端"""
+        try:
+            from sim.data_store import DataStore
+            store = DataStore()
+            return store.db_enabled
+        except ImportError:
+            return False
 
     # ------------------------------------------------------------------
     # 记录一局游戏
@@ -150,6 +168,7 @@ class ExperienceDB:
                 ak  = _action_key(action, battle_state.get_current(team))
                 self._get_or_create(team, sk, ak).wins  += won
                 self._get_or_create(team, sk, ak).total += 1
+                self._dirty_keys.add((team, sk, ak))
 
     def _get_or_create(self, team: str, sk: str, ak: str) -> ActionStats:
         team_db = self._db[team]
@@ -205,9 +224,10 @@ class ExperienceDB:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # 持久化
+    # 持久化 — JSON后端（向后兼容）
     # ------------------------------------------------------------------
-    def save(self, name: str = "default", directory: str = None) -> str:
+    def save_json(self, name: str = "default", directory: str = None) -> str:
+        """保存到JSON文件"""
         save_dir = directory or _DEFAULT_DIR
         os.makedirs(save_dir, exist_ok=True)
         filepath = os.path.join(save_dir, f"{name}.json")
@@ -223,7 +243,8 @@ class ExperienceDB:
             json.dump(serialized, f, ensure_ascii=False, separators=(",", ":"))
         return filepath
 
-    def load(self, name: str = "default", directory: str = None) -> bool:
+    def load_json(self, name: str = "default", directory: str = None) -> bool:
+        """从JSON文件加载"""
         load_dir = directory or _DEFAULT_DIR
         filepath = os.path.join(load_dir, f"{name}.json")
         if not os.path.exists(filepath):
@@ -243,6 +264,98 @@ class ExperienceDB:
                 }
         return True
 
+    # ------------------------------------------------------------------
+    # 持久化 — 统一接口（自动选择后端）
+    # ------------------------------------------------------------------
+    def save(self, name: str = "default", directory: str = None) -> str:
+        """
+        保存经验数据。
+        
+        如果数据库启用，保存到MariaDB；否则保存到JSON文件。
+        """
+        if self._use_db:
+            return self._save_to_db(name)
+        else:
+            return self.save_json(name, directory)
+    
+    def load(self, name: str = "default", directory: str = None) -> bool:
+        """
+        加载经验数据。
+        
+        如果数据库启用，从MariaDB加载；否则从JSON文件加载。
+        """
+        if self._use_db:
+            return self._load_from_db(name)
+        else:
+            return self.load_json(name, directory)
+    
+    # ------------------------------------------------------------------
+    # 数据库后端
+    # ------------------------------------------------------------------
+    def _save_to_db(self, name: str = "default") -> str:
+        """
+        保存经验数据到MariaDB。
+        
+        采用增量保存策略：只更新被修改过的记录，减少I/O开销。
+        """
+        try:
+            from sim.data_store import DataStore
+        except ImportError as e:
+            print(f"[!] DataStore导入失败，回退到JSON: {e}")
+            return self.save_json(name)
+        
+        store = DataStore()
+        if not store.db_enabled:
+            return self.save_json(name)
+        
+        # 增量保存：只更新被修改过的记录
+        for (team, sk, ak) in self._dirty_keys:
+            stats = self._db.get(team, {}).get(sk, {}).get(ak)
+            if stats is None:
+                continue
+            store.update_experience(team, sk, ak, stats.wins, stats.total)
+        
+        # 更新总局数
+        store.update_total_games(name, self.total_games)
+        
+        self._dirty_keys.clear()
+        return f"db:{name}"
+    
+    def _load_from_db(self, name: str = "default") -> bool:
+        """
+        从MariaDB加载经验数据。
+        
+        由于数据库存储的是全局经验（不按队伍名称隔离），
+        所有队伍共享同一份经验库。这符合MCTS学习的设计——
+        历史对战的经验对所有阵容都有参考价值。
+        """
+        try:
+            from sim.data_store import DataStore
+        except ImportError as e:
+            print(f"[!] DataStore导入失败，回退到JSON: {e}")
+            return self.load_json(name)
+        
+        store = DataStore()
+        if not store.db_enabled:
+            return self.load_json(name, None)
+        
+        # 从数据库加载所有经验记录
+        records = store.get_all_experience()
+        
+        self._db = {"a": {}, "b": {}}
+        for rec in records:
+            team, sk, ak = rec.team, rec.state_key, rec.action_key
+            if team not in self._db:
+                continue
+            if sk not in self._db[team]:
+                self._db[team][sk] = {}
+            self._db[team][sk][ak] = ActionStats(wins=rec.wins, total=rec.total)
+        
+        # 加载总局数
+        self.total_games = store.get_total_games(name)
+        
+        return True
+    
     @classmethod
     def load_or_create(cls, name: str = "default", directory: str = None) -> "ExperienceDB":
         db = cls()
