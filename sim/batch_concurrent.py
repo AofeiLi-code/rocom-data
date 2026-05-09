@@ -97,11 +97,32 @@ def _run_single_battle(args: tuple) -> dict:
     
     if not winner:
         winner = engine.check_winner()
-    
+
     # 记录经验
     agent_a.experience_db.record_game(history, winner)
     agent_b.experience_db.record_game(history, winner)
-    
+
+    # 实时把详细战斗日志落到 MariaDB（如启用）
+    try:
+        from sim.data_store import DataStore
+        from sim.battle_log_capture import serialize_team, serialize_final_state
+        store = DataStore()
+        if store.db_enabled:
+            store.record_battle_log(
+                team_a_name=team_a_name,
+                team_b_name=team_b_name,
+                winner=winner,
+                turns=state.turn,
+                mcts_iters=mcts_iters,
+                team_a_lineup=serialize_team(state.team_a),
+                team_b_lineup=serialize_team(state.team_b),
+                final_state=serialize_final_state(state),
+                log_lines=list(engine.log),
+            )
+    except Exception as _e:
+        # 单场日志写库失败不影响训练流程
+        print(f"  [!] 战斗日志落库失败: {_e}")
+
     return {
         "winner": winner,
         "turns": state.turn,

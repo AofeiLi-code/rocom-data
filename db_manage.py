@@ -8,7 +8,7 @@
   python db_manage.py migrate       # 从JSON迁移数据到数据库
   python db_manage.py stats         # 查看数据统计
   python db_manage.py battles N     # 查看最近N场对战记录
-  python db_match A B               # 查询A队对B队的胜率
+  python db_manage.py match A B     # 查询A队对B队的胜率
 """
 
 import sys
@@ -144,9 +144,9 @@ def main():
         print("    battles N     - 查看最近N场对战记录")
         print("    match A B     - 查询A队对B队的胜率")
         return
-    
+
     cmd = sys.argv[1].lower()
-    
+
     if cmd == "init":
         cmd_init()
     elif cmd == "migrate":

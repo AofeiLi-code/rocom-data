@@ -107,11 +107,41 @@ class PokemonRecord(Base):
     精灵数据表（可选，未来迁移精灵数据时使用）
     """
     __tablename__ = "pokemon_records"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(64), unique=True, nullable=False)  # 精灵名称
     data_json = Column(Text, nullable=False)  # 完整JSON数据
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class BattleLogRecord(Base):
+    """
+    详细战斗日志表 — 每场对战实时落库，用于 LLM 复盘分析
+
+    存储内容：
+      - 双方完整阵容（精灵/特性/性格/技能 → JSON）
+      - 引擎日志全文（每回合的攻击/伤害/异常/特性触发等）
+      - 双方最终残血状态（JSON）
+    """
+    __tablename__ = "battle_log_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    team_a_name = Column(String(64), nullable=False)
+    team_b_name = Column(String(64), nullable=False)
+    winner = Column(String(1))  # "a" / "b" / None
+    turns = Column(Integer, default=0)
+    mcts_iters = Column(Integer, default=0)
+    team_a_lineup = Column(Text, nullable=False)   # JSON
+    team_b_lineup = Column(Text, nullable=False)   # JSON
+    final_state = Column(Text, nullable=False)     # JSON
+    log_text = Column(Text, nullable=False)        # engine.log join
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_blog_time", "created_at"),
+        Index("idx_blog_teams", "team_a_name", "team_b_name"),
+        Index("idx_blog_winner", "winner"),
+    )
 
 
 # ============================================================
@@ -451,6 +481,120 @@ class DataStore:
                 team_a_name, team_b_name, winner, turns, elapsed_ms, mcts_iters
             )
     
+    def record_battle_log(
+        self,
+        team_a_name: str,
+        team_b_name: str,
+        winner: Optional[str],
+        turns: int,
+        mcts_iters: int,
+        team_a_lineup: list,
+        team_b_lineup: list,
+        final_state: dict,
+        log_lines: list,
+    ) -> Optional[int]:
+        """
+        记录一场详细战斗日志（用于 LLM 复盘）。
+
+        Returns
+        -------
+        int | None : 成功时返回插入行 id，未启用 DB 或失败返回 None
+        """
+        if not self._use_db:
+            return None
+        engine = get_engine(self.config)
+        SessionLocal = sessionmaker(bind=engine)
+        session = SessionLocal()
+        try:
+            rec = BattleLogRecord(
+                team_a_name=team_a_name,
+                team_b_name=team_b_name,
+                winner=winner,
+                turns=turns,
+                mcts_iters=mcts_iters,
+                team_a_lineup=json.dumps(team_a_lineup, ensure_ascii=False),
+                team_b_lineup=json.dumps(team_b_lineup, ensure_ascii=False),
+                final_state=json.dumps(final_state, ensure_ascii=False),
+                log_text="\n".join(log_lines) if log_lines else "",
+            )
+            session.add(rec)
+            session.commit()
+            return rec.id
+        except Exception as e:
+            session.rollback()
+            print(f"  [!] 战斗日志保存失败: {e}")
+            return None
+        finally:
+            session.close()
+
+    def get_battle_log(self, log_id: int) -> Optional[dict]:
+        """
+        按 id 读取一场详细战斗日志（解析 JSON 字段）。
+        """
+        if not self._use_db:
+            return None
+        engine = get_engine(self.config)
+        SessionLocal = sessionmaker(bind=engine)
+        session = SessionLocal()
+        try:
+            r = session.query(BattleLogRecord).filter_by(id=log_id).first()
+            if not r:
+                return None
+            return {
+                "id": r.id,
+                "team_a_name": r.team_a_name,
+                "team_b_name": r.team_b_name,
+                "winner": r.winner,
+                "turns": r.turns,
+                "mcts_iters": r.mcts_iters,
+                "team_a_lineup": json.loads(r.team_a_lineup),
+                "team_b_lineup": json.loads(r.team_b_lineup),
+                "final_state": json.loads(r.final_state),
+                "log_text": r.log_text,
+                "created_at": str(r.created_at),
+            }
+        finally:
+            session.close()
+
+    def list_battle_logs(
+        self,
+        limit: int = 20,
+        winner: Optional[str] = None,
+        team: Optional[str] = None,
+    ) -> List[dict]:
+        """
+        列出最近的详细战斗日志摘要（不含大字段）。
+        """
+        if not self._use_db:
+            return []
+        engine = get_engine(self.config)
+        SessionLocal = sessionmaker(bind=engine)
+        session = SessionLocal()
+        try:
+            q = session.query(BattleLogRecord)
+            if winner is not None:
+                q = q.filter_by(winner=winner)
+            if team:
+                from sqlalchemy import or_
+                q = q.filter(or_(
+                    BattleLogRecord.team_a_name == team,
+                    BattleLogRecord.team_b_name == team,
+                ))
+            rows = q.order_by(BattleLogRecord.created_at.desc()).limit(limit).all()
+            return [
+                {
+                    "id": r.id,
+                    "team_a_name": r.team_a_name,
+                    "team_b_name": r.team_b_name,
+                    "winner": r.winner,
+                    "turns": r.turns,
+                    "created_at": str(r.created_at),
+                }
+                for r in rows
+            ]
+        finally:
+            session.close()
+
     def get_battle_stats(self, limit: int = 10) -> List[dict]:
         """
         获取最近的对战统计。
